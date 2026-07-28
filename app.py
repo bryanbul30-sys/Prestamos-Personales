@@ -6,6 +6,7 @@ from datetime import date
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 import config
 from sheets_client import get_spreadsheet
@@ -72,7 +73,57 @@ def fmt_money(v):
         return v
 
 
+# Dentro de un st.form, Enter normalmente envia el formulario de una vez
+# (comportamiento nativo de <form> en HTML), sin importar en que campo este
+# el cursor. Esto hace que avance al siguiente campo de texto/numero en vez
+# de enviar, y en el ultimo campo si envia. No toca selectbox ni date_input
+# (esos ya tienen su propio manejo de Enter para abrir/confirmar opciones).
+ENTER_AVANZA_CAMPO_JS = """
+<script>
+const doc = window.parent.document;
+
+function esCampoDeAvance(el) {
+    if (!el || el.tagName !== 'INPUT') return false;
+    if (el.type !== 'text' && el.type !== 'number') return false;
+    if (el.getAttribute('role') === 'combobox') return false;
+    if (el.closest('[data-baseweb="select"]')) return false;
+    if (el.closest('[data-baseweb="datepicker"]')) return false;
+    if (el.closest('[data-baseweb="calendar"]')) return false;
+    return true;
+}
+
+function attachEnterNav(form) {
+    if (form.dataset.enterNavAttached) return;
+    form.dataset.enterNavAttached = '1';
+    form.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        if (!esCampoDeAvance(e.target)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const focusables = Array.from(
+            form.querySelectorAll('input, select, textarea, [tabindex]')
+        ).filter((el) => el.offsetParent !== null && !el.disabled);
+        const idx = focusables.indexOf(e.target);
+        if (idx > -1 && idx < focusables.length - 1) {
+            focusables[idx + 1].focus();
+        } else {
+            const btn = form.querySelector('button[kind="formSubmit"], button[type="submit"]');
+            if (btn) btn.click();
+        }
+    });
+}
+
+function attachAll() {
+    doc.querySelectorAll('.stForm').forEach(attachEnterNav);
+}
+
+attachAll();
+new MutationObserver(attachAll).observe(doc.body, { childList: true, subtree: true });
+</script>
+"""
+
 st.title("\U0001F4B0 Control de Prestamos")
+components.html(ENTER_AVANZA_CAMPO_JS, height=0)
 
 try:
     sh = _sheet()
