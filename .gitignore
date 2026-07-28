@@ -1,3 +1,4 @@
 credenciales.json
+secrets_para_streamlit_cloud.toml
 __pycache__/
 *.pyc
