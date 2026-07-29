@@ -17,6 +17,7 @@ haz una copia de respaldo de la hoja antes de re-correrlo.
 import gspread
 
 import config
+from calculos import DIAS_POR_FRECUENCIA
 from sheets_client import get_spreadsheet
 
 FONT = "Arial"
@@ -45,6 +46,23 @@ PAGOS_HEADERS = [
 # nuevo en Pagos) se pre-escriben. Se puede arrastrar mas abajo a mano si
 # se llenan todas.
 PAGOS_PREFILL_ROWS = 500
+
+
+def _ifs_dias_por_frecuencia(expr_frecuencia, default):
+    """IFS(expr="Diario",1, expr="Semanal",7, ...) a partir de
+    DIAS_POR_FRECUENCIA -- para no repetir esos numeros sueltos en cada
+    formula que los necesita."""
+    partes = [f'{expr_frecuencia}="{frec}",{dias}' for frec, dias in DIAS_POR_FRECUENCIA.items()]
+    partes.append(f"TRUE,{default}")
+    return f"IFS({','.join(partes)})"
+
+
+def _ifs_factor_frecuencia(expr_frecuencia):
+    """Igual que _ifs_dias_por_frecuencia pero como fraccion de un mes de
+    30 dias (el factor de prorrateo sobre la tasa mensual)."""
+    partes = [f'{expr_frecuencia}="{frec}",{dias}/30' for frec, dias in DIAS_POR_FRECUENCIA.items()]
+    partes.append("TRUE,1")
+    return f"IFS({','.join(partes)})"
 
 
 def get_or_create_ws(sh, title, rows, cols):
@@ -77,7 +95,10 @@ def setup_prestamos(sh):
         "I2": '=ARRAYFORMULA(IF(B2:B1000="","",SUMIF(Pagos!$B$2:$B1000,A2:A1000,Pagos!$G$2:$G1000)))',
         "J2": '=ARRAYFORMULA(IF(B2:B1000="","",IF(COUNTIF(Pagos!$B$2:$B1000,A2:A1000)=0,"",MAXIFS(Pagos!$D$2:$D1000,Pagos!$B$2:$B1000,A2:A1000))))',
         "K2": '=ARRAYFORMULA(IF(B2:B1000="","",IF(J2:J1000="",TODAY()-C2:C1000,TODAY()-J2:J1000)))',
-        "L2": '=ARRAYFORMULA(IF(B2:B1000="","",IFS(F2:F1000="Diario",1,F2:F1000="Semanal",7,F2:F1000="Quincenal",15,F2:F1000="Mensual",30,TRUE,30)+Resumen!$B$2))',
+        "L2": (
+            '=ARRAYFORMULA(IF(B2:B1000="","",'
+            f"{_ifs_dias_por_frecuencia('F2:F1000', 30)}+Resumen!$B$2))"
+        ),
         "M2": '=ARRAYFORMULA(IF(B2:B1000="","",IF(G2:G1000<=0,"Pagado",IF(K2:K1000>L2:L1000,"Atrasado","Al dia"))))',
     }
     for cell, formula in formulas.items():
@@ -122,8 +143,7 @@ def setup_pagos(sh):
         f = (f'=IF(B{row}="","",IFERROR(VLOOKUP(B{row},Prestamos!$A:$D,4,FALSE)'
              f'-SUMIFS($H$1:H{row - 1},$B$1:B{row - 1},B{row}),"ID invalido"))')
         frecuencia = f'IFERROR(VLOOKUP(B{row},Prestamos!$A:$F,6,FALSE),"")'
-        factor = (f'IFS({frecuencia}="Diario",1/30,{frecuencia}="Semanal",7/30,'
-                  f'{frecuencia}="Quincenal",15/30,{frecuencia}="Mensual",1,TRUE,1)')
+        factor = _ifs_factor_frecuencia(frecuencia)
         g = (f'=IF(B{row}="","",IF(F{row}="ID invalido","",'
              f'F{row}*IFERROR(VLOOKUP(B{row},Prestamos!$A:$E,5,FALSE),0)*{factor}))')
         h = f'=IF(B{row}="","",IF(F{row}="ID invalido","",MAX(0,E{row}-G{row})))'

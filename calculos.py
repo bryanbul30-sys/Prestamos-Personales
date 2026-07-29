@@ -12,7 +12,13 @@ cambia tambien la formula equivalente en setup_sheet.py -- no hay forma
 de compartir codigo entre Python y una formula de hoja de calculo.
 """
 
-FACTOR_FRECUENCIA = {"Diario": 1 / 30, "Semanal": 7 / 30, "Quincenal": 15 / 30, "Mensual": 1}
+# Fuente unica de estos dias: setup_sheet.py genera a partir de este mismo
+# diccionario las formulas de Google Sheets que usan el mismo prorrateo
+# ("Dias max permitidos" en Prestamos e "Interes del periodo" en Pagos),
+# en vez de tener los numeros sueltos y repetidos en varios lugares.
+DIAS_POR_FRECUENCIA = {"Diario": 1, "Semanal": 7, "Quincenal": 15, "Mensual": 30}
+
+FACTOR_FRECUENCIA = {frec: dias / 30 for frec, dias in DIAS_POR_FRECUENCIA.items()}
 
 
 def factor_frecuencia(frecuencia):

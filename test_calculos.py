@@ -1,8 +1,6 @@
-import math
-
 import pytest
 
-from calculos import calcular_pago, fmt_money, fmt_pct, siguiente_fila_libre
+from calculos import DIAS_POR_FRECUENCIA, FACTOR_FRECUENCIA, calcular_pago, fmt_money, fmt_pct, siguiente_fila_libre
 
 
 def test_calcular_pago_quincenal_abona_capital():
@@ -62,6 +60,18 @@ def test_fmt_pct_convierte_decimal_a_porcentaje():
 def test_fmt_pct_valores_nulos():
     assert fmt_pct(None) == ""
     assert fmt_pct(float("nan")) == ""
+
+
+def test_factor_frecuencia_se_deriva_de_dias_por_frecuencia():
+    # FACTOR_FRECUENCIA tiene que ser exactamente DIAS_POR_FRECUENCIA / 30
+    # -- son la misma fuente que usa setup_sheet.py para generar las
+    # formulas de la hoja. Si esto falla, Python y la hoja quedaron
+    # calculando el prorrateo de forma distinta.
+    assert set(FACTOR_FRECUENCIA) == set(DIAS_POR_FRECUENCIA)
+    for frecuencia, dias in DIAS_POR_FRECUENCIA.items():
+        assert FACTOR_FRECUENCIA[frecuencia] == pytest.approx(dias / 30)
+    assert DIAS_POR_FRECUENCIA["Mensual"] == 30
+    assert FACTOR_FRECUENCIA["Quincenal"] == pytest.approx(0.5)
 
 
 def test_siguiente_fila_libre_sin_huecos():
