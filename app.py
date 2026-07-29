@@ -2,6 +2,7 @@
 
 Corre con:  streamlit run app.py
 """
+import html
 from datetime import date
 
 import pandas as pd
@@ -30,11 +31,67 @@ PAGOS_COLS_ORDEN = [
     "Abono a capital",
 ]
 
+COLUMNAS_DINERO = {
+    "Monto prestado", "Saldo pendiente", "Total pagado", "Interes cobrado",
+    "Monto pagado", "Saldo anterior", "Interes del periodo", "Abono a capital",
+    "Saldo nuevo",
+}
+
+TABLA_CSS = """
+<style>
+.tabla-scroll { overflow-x: auto; margin-bottom: 1rem; }
+.tabla-app { border-collapse: collapse; width: 100%; white-space: nowrap; }
+.tabla-app th {
+    text-align: left; padding: 0.4rem 0.75rem;
+    border-bottom: 2px solid rgba(128, 128, 128, 0.35); font-weight: 600;
+}
+.tabla-app td {
+    padding: 0.4rem 0.75rem; border-bottom: 1px solid rgba(128, 128, 128, 0.15);
+}
+.tabla-app td.num {
+    text-align: right; font-size: 1.15rem; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+</style>
+"""
+
 
 def reordenar(df, orden):
     cols = [c for c in orden if c in df.columns]
     cols += [c for c in df.columns if c not in cols]
     return df[cols]
+
+
+def _celda(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    return html.escape(str(v))
+
+
+def render_tabla(df, orden=None):
+    """Tabla en HTML propia (en vez de st.dataframe) para poder controlar el
+    formato de miles y el tamano de letra de los montos, cosa que
+    st.dataframe no permite (dibuja las celdas en un canvas). Se pierde
+    poder ordenar/redimensionar columnas con el mouse, aceptable para el
+    volumen de datos de un uso personal."""
+    d = reordenar(df, orden) if orden else df
+    encabezados = "".join(f"<th>{html.escape(str(c))}</th>" for c in d.columns)
+    filas = []
+    for _, r in d.iterrows():
+        celdas = []
+        for c in d.columns:
+            valor = r[c]
+            if c in COLUMNAS_DINERO:
+                celdas.append(f'<td class="num">{fmt_money(valor)}</td>')
+            else:
+                celdas.append(f"<td>{_celda(valor)}</td>")
+        filas.append(f"<tr>{''.join(celdas)}</tr>")
+    tabla_html = (
+        f'<div class="tabla-scroll"><table class="tabla-app">'
+        f"<thead><tr>{encabezados}</tr></thead><tbody>{''.join(filas)}</tbody>"
+        f"</table></div>"
+    )
+    st.markdown(TABLA_CSS + tabla_html, unsafe_allow_html=True)
 
 
 @st.cache_resource(show_spinner=False)
@@ -61,14 +118,43 @@ def load_df(ws_name, numeric_cols=None):
 
 
 def next_row(ws, input_col_letter):
+    """Primera fila libre despues de la ultima realmente usada. No cuenta
+    celdas llenas (eso falla si hay huecos en el medio, p.ej. por un
+    prestamo eliminado) -- busca el indice de fila mas alto con datos."""
     values = ws.col_values(ord(input_col_letter) - ord("A") + 1)
-    filled = [v for v in values[1:] if str(v).strip() != ""]
-    return len(filled) + 2
+    ultima_usada = 1  # fila de encabezados
+    for i, v in enumerate(values, start=1):
+        if str(v).strip() != "":
+            ultima_usada = i
+    return ultima_usada + 1
+
+
+def eliminar_prestamo(sh, id_prestamo):
+    """Vacia los datos de entrada del prestamo (y de sus pagos) sin borrar
+    la fila. El ID de cada prestamo se calcula segun la posicion de su fila
+    (formula ARRAYFORMULA en la columna A) -- si se borrara la fila entera,
+    todo lo de abajo correria una posicion y sus ID cambiarian, invalidando
+    los pagos ya registrados de esos otros prestamos. Vaciar en vez de
+    borrar deja a los demas intactos."""
+    ws_p = sh.worksheet(config.SHEET_PRESTAMOS)
+    celda = ws_p.find(id_prestamo, in_column=1)
+    if celda:
+        ws_p.batch_clear([f"B{celda.row}:F{celda.row}"])
+
+    ws_pg = sh.worksheet(config.SHEET_PAGOS)
+    celdas_pago = ws_pg.findall(id_prestamo, in_column=2)
+    if celdas_pago:
+        rangos = []
+        for c in celdas_pago:
+            rangos.append(f"B{c.row}")
+            rangos.append(f"D{c.row}:E{c.row}")
+        ws_pg.batch_clear(rangos)
 
 
 def fmt_money(v):
     try:
-        return f"₡{float(v):,.0f}"
+        # Miles con punto (formato usado en CR), no con coma.
+        return f"₡{float(v):,.0f}".replace(",", ".")
     except (TypeError, ValueError):
         return v
 
@@ -122,8 +208,20 @@ new MutationObserver(attachAll).observe(doc.body, { childList: true, subtree: tr
 </script>
 """
 
+# Los campos de monto (numero) se ven con letra mas grande, a juego con los
+# montos de las tablas.
+CAMPOS_MONTO_CSS = """
+<style>
+div[data-testid="stNumberInput"] input {
+    font-size: 1.25rem !important;
+    font-weight: 600 !important;
+}
+</style>
+"""
+
 st.markdown("## \U0001F4B0 Control de Prestamos")
 st.caption("Seguimiento de prestamos, pagos e intereses")
+st.markdown(CAMPOS_MONTO_CSS, unsafe_allow_html=True)
 components.html(ENTER_AVANZA_CAMPO_JS, height=0)
 
 try:
@@ -175,10 +273,7 @@ with tab_resumen:
         atrasados = prestamos_df[prestamos_df["Estado"] == "Atrasado"]
         if not atrasados.empty:
             st.subheader("⚠️ Prestamos atrasados")
-            st.dataframe(
-                atrasados[["Cliente", "Saldo pendiente", "Fecha ultimo pago", "Dias desde referencia"]],
-                use_container_width=True, hide_index=True,
-            )
+            render_tabla(atrasados[["Cliente", "Saldo pendiente", "Fecha ultimo pago", "Dias desde referencia"]])
         else:
             st.success("Ningun prestamo atrasado ahora mismo.")
 
@@ -187,7 +282,7 @@ with tab_prestamos:
     if prestamos_df.empty:
         st.info("Aun no hay prestamos registrados.")
     else:
-        st.dataframe(reordenar(prestamos_df, PRESTAMOS_COLS_ORDEN), use_container_width=True, hide_index=True)
+        render_tabla(prestamos_df, PRESTAMOS_COLS_ORDEN)
 
     st.divider()
     st.subheader("Registrar nuevo prestamo")
@@ -211,6 +306,36 @@ with tab_prestamos:
                 )
                 st.success(f"Prestamo de {cliente} guardado.")
                 load_df.clear()
+                st.rerun()
+
+    if not prestamos_df.empty:
+        st.divider()
+        st.subheader("Eliminar prestamo")
+        opciones_borrar = {
+            f"{r['ID Prestamo']} - {r['Cliente']} (saldo {fmt_money(r['Saldo pendiente'])})": r["ID Prestamo"]
+            for _, r in prestamos_df.iterrows()
+        }
+        etiqueta_borrar = st.selectbox("Prestamo a eliminar", list(opciones_borrar.keys()))
+        id_borrar = opciones_borrar[etiqueta_borrar]
+
+        if st.session_state.get("confirmar_borrado") == id_borrar:
+            st.warning(
+                f"Esto elimina el prestamo {id_borrar} y todos sus pagos registrados. "
+                "No se puede deshacer. ¿Confirmas?"
+            )
+            cconf, ccancel = st.columns(2)
+            if cconf.button("Si, eliminar definitivamente", type="primary"):
+                eliminar_prestamo(sh, id_borrar)
+                st.session_state.pop("confirmar_borrado", None)
+                load_df.clear()
+                st.success(f"Prestamo {id_borrar} eliminado.")
+                st.rerun()
+            if ccancel.button("Cancelar"):
+                st.session_state.pop("confirmar_borrado", None)
+                st.rerun()
+        else:
+            if st.button("Eliminar este prestamo"):
+                st.session_state["confirmar_borrado"] = id_borrar
                 st.rerun()
 
 with tab_pago:
@@ -259,4 +384,4 @@ with tab_pago:
     if pagos_df.empty:
         st.info("Aun no hay pagos registrados.")
     else:
-        st.dataframe(reordenar(pagos_df, PAGOS_COLS_ORDEN), use_container_width=True, hide_index=True)
+        render_tabla(pagos_df, PAGOS_COLS_ORDEN)
