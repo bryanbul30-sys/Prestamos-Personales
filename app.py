@@ -17,8 +17,12 @@ st.set_page_config(page_title="Control de Prestamos", page_icon="\U0001F4B0", la
 FRECUENCIAS = ["Diario", "Semanal", "Quincenal", "Mensual"]
 PAGOS_PREFILL_ROWS = 500
 
-# Columnas mas importantes primero, para que se vean sin hacer scroll
-# horizontal en pantallas angostas (celular).
+# Vista resumida: solo lo esencial de un vistazo (sin scroll horizontal).
+# El detalle completo (fechas, montos historicos, ID) sigue en el Google
+# Sheet, y tambien disponible aca abajo del todo en un expander opcional.
+PRESTAMOS_COLS_RESUMEN = ["Cliente", "Tasa interes (%/periodo)", "Saldo pendiente", "Estado"]
+
+# Orden completo, usado en el expander "Ver todos los detalles".
 PRESTAMOS_COLS_ORDEN = [
     "Cliente", "Estado", "Saldo pendiente", "Monto prestado",
     "Fecha ultimo pago", "ID Prestamo", "Fecha inicio",
@@ -282,7 +286,9 @@ with tab_prestamos:
     if prestamos_df.empty:
         st.info("Aun no hay prestamos registrados.")
     else:
-        render_tabla(prestamos_df, PRESTAMOS_COLS_ORDEN)
+        render_tabla(prestamos_df[PRESTAMOS_COLS_RESUMEN])
+        with st.expander("Ver todos los detalles (fechas, montos historicos, ID)"):
+            render_tabla(prestamos_df, PRESTAMOS_COLS_ORDEN)
 
     st.divider()
     st.subheader("Registrar nuevo prestamo")
