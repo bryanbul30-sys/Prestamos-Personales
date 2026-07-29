@@ -3,6 +3,7 @@
 Corre con:  streamlit run app.py
 """
 import html
+import urllib.parse
 from datetime import date
 
 import pandas as pd
@@ -404,15 +405,51 @@ with tab_pago:
                             )
                         else:
                             id_prestamo = opciones[etiqueta]
+                            prestamo = activos[activos["ID Prestamo"] == id_prestamo].iloc[0]
+                            saldo_anterior = float(prestamo["Saldo pendiente"])
+                            tasa = float(prestamo["Tasa interes (%/periodo)"])
+                            factor = FACTOR_FRECUENCIA.get(prestamo["Frecuencia de pago"], 1)
+                            interes = saldo_anterior * tasa * factor
+                            abono = max(0, monto_pagado - interes)
+                            saldo_nuevo = saldo_anterior - abono
+
                             # Columna C (Cliente) es formula -- no se escribe.
                             ws.update([[id_prestamo]], f"B{row}", value_input_option="USER_ENTERED")
                             ws.update(
                                 [[fecha_pago.strftime("%Y-%m-%d"), monto_pagado]],
                                 f"D{row}:E{row}", value_input_option="USER_ENTERED",
                             )
-                            st.success("Pago guardado.")
+                            st.session_state["ultimo_pago"] = {
+                                "cliente": prestamo["Cliente"],
+                                "fecha": fecha_pago.strftime("%d/%m/%Y"),
+                                "saldo_anterior": saldo_anterior,
+                                "interes": interes,
+                                "monto_pagado": monto_pagado,
+                                "abono": abono,
+                                "saldo_nuevo": saldo_nuevo,
+                            }
                             load_df.clear()
                             st.rerun()
+
+    if "ultimo_pago" in st.session_state:
+        p = st.session_state["ultimo_pago"]
+        st.success("Pago guardado.")
+        mensaje = (
+            f"Hola {p['cliente']}\n\n"
+            f"Resumen de tu pago del {p['fecha']}:\n"
+            f"Saldo anterior: {fmt_money(p['saldo_anterior'])}\n"
+            f"Interes: {fmt_money(p['interes'])}\n"
+            f"Monto pagado: {fmt_money(p['monto_pagado'])}\n"
+            f"Abono a capital: {fmt_money(p['abono'])}\n"
+            f"Saldo actual: {fmt_money(p['saldo_nuevo'])}"
+        )
+        st.text_area("Mensaje para compartir", mensaje, height=170)
+        link_wsp = "https://wa.me/?text=" + urllib.parse.quote(mensaje)
+        cwsp, ccerrar = st.columns([1, 1])
+        cwsp.link_button("📲 Enviar por WhatsApp", link_wsp)
+        if ccerrar.button("Cerrar"):
+            del st.session_state["ultimo_pago"]
+            st.rerun()
 
     st.divider()
     st.subheader("Historial de pagos")
