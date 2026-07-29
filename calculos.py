@@ -2,8 +2,9 @@
 probarlos con pytest de forma aislada.
 
 IMPORTANTE: la tasa de interes se guarda siempre como tasa MENSUAL. El
-interes de cada pago se prorratea segun la frecuencia (mismos dias de
-referencia que "Dias max permitidos" en Prestamos: mes de 30 dias).
+interes de cada pago se prorratea dividiendo esa tasa entre la cantidad
+de pagos que entran en un mes (ver PAGOS_POR_MES) -- no es un prorrateo
+por dias calendario.
 
 Esta misma regla esta implementada por separado como formula de Google
 Sheets en setup_sheet.py (columna G de Pagos, la que manda de verdad
@@ -12,13 +13,19 @@ cambia tambien la formula equivalente en setup_sheet.py -- no hay forma
 de compartir codigo entre Python y una formula de hoja de calculo.
 """
 
-# Fuente unica de estos dias: setup_sheet.py genera a partir de este mismo
-# diccionario las formulas de Google Sheets que usan el mismo prorrateo
-# ("Dias max permitidos" en Prestamos e "Interes del periodo" en Pagos),
-# en vez de tener los numeros sueltos y repetidos en varios lugares.
-DIAS_POR_FRECUENCIA = {"Diario": 1, "Semanal": 7, "Quincenal": 15, "Mensual": 30}
+# Cuantos pagos entran en un mes, segun la frecuencia -- define el
+# prorrateo del interes (factor = 1 / pagos_por_mes). Fuente unica:
+# setup_sheet.py genera a partir de este mismo diccionario la formula de
+# Google Sheets equivalente ("Interes del periodo" en Pagos).
+PAGOS_POR_MES = {"Diario": 30, "Semanal": 4, "Quincenal": 2, "Mensual": 1}
 
-FACTOR_FRECUENCIA = {frec: dias / 30 for frec, dias in DIAS_POR_FRECUENCIA.items()}
+FACTOR_FRECUENCIA = {frec: 1 / pagos for frec, pagos in PAGOS_POR_MES.items()}
+
+# Dias calendario reales entre pagos, segun la frecuencia. No tiene
+# relacion con el prorrateo de interes de arriba -- se usa solo para
+# "Dias max permitidos" (Prestamos!L en setup_sheet.py), que decide
+# cuanto puede pasar sin pagar antes de marcar un prestamo Atrasado.
+DIAS_POR_FRECUENCIA = {"Diario": 1, "Semanal": 7, "Quincenal": 15, "Mensual": 30}
 
 
 def factor_frecuencia(frecuencia):

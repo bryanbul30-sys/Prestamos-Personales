@@ -17,7 +17,7 @@ haz una copia de respaldo de la hoja antes de re-correrlo.
 import gspread
 
 import config
-from calculos import DIAS_POR_FRECUENCIA
+from calculos import DIAS_POR_FRECUENCIA, PAGOS_POR_MES
 from sheets_client import get_spreadsheet
 
 FONT = "Arial"
@@ -58,9 +58,10 @@ def _ifs_dias_por_frecuencia(expr_frecuencia, default):
 
 
 def _ifs_factor_frecuencia(expr_frecuencia):
-    """Igual que _ifs_dias_por_frecuencia pero como fraccion de un mes de
-    30 dias (el factor de prorrateo sobre la tasa mensual)."""
-    partes = [f'{expr_frecuencia}="{frec}",{dias}/30' for frec, dias in DIAS_POR_FRECUENCIA.items()]
+    """IFS(expr="Diario",1/30, expr="Semanal",1/4, ...) a partir de
+    PAGOS_POR_MES -- el factor de prorrateo sobre la tasa mensual (no
+    tiene relacion con los dias calendario de _ifs_dias_por_frecuencia)."""
+    partes = [f'{expr_frecuencia}="{frec}",1/{pagos}' for frec, pagos in PAGOS_POR_MES.items()]
     partes.append("TRUE,1")
     return f"IFS({','.join(partes)})"
 

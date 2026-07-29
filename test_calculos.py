@@ -1,6 +1,6 @@
 import pytest
 
-from calculos import DIAS_POR_FRECUENCIA, FACTOR_FRECUENCIA, calcular_pago, fmt_money, fmt_pct, siguiente_fila_libre
+from calculos import FACTOR_FRECUENCIA, PAGOS_POR_MES, calcular_pago, fmt_money, fmt_pct, siguiente_fila_libre
 
 
 def test_calcular_pago_quincenal_abona_capital():
@@ -19,11 +19,13 @@ def test_calcular_pago_mensual_no_prorratea():
 
 
 def test_calcular_pago_semanal_y_diario():
+    # El prorrateo es "1 dividido entre pagos por mes", no por dias
+    # calendario: semanal se divide entre 4 (no entre 30/7).
     semanal = calcular_pago(100_000, 0.10, "Semanal", 20_000)
-    assert semanal["interes"] == pytest.approx(100_000 * 0.10 * 7 / 30)
+    assert semanal["interes"] == pytest.approx(100_000 * 0.10 / 4)
 
     diario = calcular_pago(100_000, 0.10, "Diario", 20_000)
-    assert diario["interes"] == pytest.approx(100_000 * 0.10 * 1 / 30)
+    assert diario["interes"] == pytest.approx(100_000 * 0.10 / 30)
 
 
 def test_calcular_pago_no_cubre_interes_no_abona_capital():
@@ -62,15 +64,16 @@ def test_fmt_pct_valores_nulos():
     assert fmt_pct(float("nan")) == ""
 
 
-def test_factor_frecuencia_se_deriva_de_dias_por_frecuencia():
-    # FACTOR_FRECUENCIA tiene que ser exactamente DIAS_POR_FRECUENCIA / 30
-    # -- son la misma fuente que usa setup_sheet.py para generar las
-    # formulas de la hoja. Si esto falla, Python y la hoja quedaron
-    # calculando el prorrateo de forma distinta.
-    assert set(FACTOR_FRECUENCIA) == set(DIAS_POR_FRECUENCIA)
-    for frecuencia, dias in DIAS_POR_FRECUENCIA.items():
-        assert FACTOR_FRECUENCIA[frecuencia] == pytest.approx(dias / 30)
-    assert DIAS_POR_FRECUENCIA["Mensual"] == 30
+def test_factor_frecuencia_se_deriva_de_pagos_por_mes():
+    # FACTOR_FRECUENCIA tiene que ser exactamente 1 / PAGOS_POR_MES -- son
+    # la misma fuente que usa setup_sheet.py para generar la formula de
+    # la hoja. Si esto falla, Python y la hoja quedaron calculando el
+    # prorrateo de forma distinta.
+    assert set(FACTOR_FRECUENCIA) == set(PAGOS_POR_MES)
+    for frecuencia, pagos in PAGOS_POR_MES.items():
+        assert FACTOR_FRECUENCIA[frecuencia] == pytest.approx(1 / pagos)
+    assert PAGOS_POR_MES == {"Diario": 30, "Semanal": 4, "Quincenal": 2, "Mensual": 1}
+    assert FACTOR_FRECUENCIA["Semanal"] == pytest.approx(0.25)
     assert FACTOR_FRECUENCIA["Quincenal"] == pytest.approx(0.5)
 
 
