@@ -1,5 +1,7 @@
 credenciales.json
 secrets_para_streamlit_cloud.toml
+.streamlit/secrets.toml
 Control de Prestamos.xlsx
 __pycache__/
 *.pyc
+.pytest_cache/

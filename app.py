@@ -11,6 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 import config
+from calculos import FACTOR_FRECUENCIA, calcular_pago, fmt_money, fmt_pct, siguiente_fila_libre
 from sheets_client import get_spreadsheet
 
 st.set_page_config(page_title="Control de Prestamos", page_icon="\U0001F4B0", layout="wide")
@@ -37,11 +38,6 @@ COLUMNAS_DINERO = {
     "Saldo nuevo", "Monto",
 }
 COLUMNAS_PORCENTAJE = {"Tasa interes (%/periodo)", "Interés"}
-
-# La tasa ingresada es siempre mensual; el interes de cada periodo se
-# prorratea segun la frecuencia de pago (mismos dias de referencia que la
-# formula de "Dias max permitidos" en la hoja: mes de 30 dias).
-FACTOR_FRECUENCIA = {"Diario": 1 / 30, "Semanal": 7 / 30, "Quincenal": 15 / 30, "Mensual": 1}
 
 TABLA_CSS = """
 <style>
@@ -126,15 +122,8 @@ def load_df(ws_name, numeric_cols=None):
 
 
 def next_row(ws, input_col_letter):
-    """Primera fila libre despues de la ultima realmente usada. No cuenta
-    celdas llenas (eso falla si hay huecos en el medio, p.ej. por un
-    prestamo eliminado) -- busca el indice de fila mas alto con datos."""
     values = ws.col_values(ord(input_col_letter) - ord("A") + 1)
-    ultima_usada = 1  # fila de encabezados
-    for i, v in enumerate(values, start=1):
-        if str(v).strip() != "":
-            ultima_usada = i
-    return ultima_usada + 1
+    return siguiente_fila_libre(values)
 
 
 def eliminar_prestamo(sh, id_prestamo):
@@ -157,28 +146,6 @@ def eliminar_prestamo(sh, id_prestamo):
             rangos.append(f"B{c.row}")
             rangos.append(f"D{c.row}:E{c.row}")
         ws_pg.batch_clear(rangos)
-
-
-def fmt_money(v):
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return ""
-    try:
-        # Miles con punto (formato usado en CR), no con coma.
-        return f"₡{float(v):,.0f}".replace(",", ".")
-    except (TypeError, ValueError):
-        return v
-
-
-def fmt_pct(v):
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return ""
-    try:
-        # La hoja guarda la tasa como decimal (0.1 = 10%).
-        n = float(v) * 100
-        s = f"{n:.1f}".rstrip("0").rstrip(".")
-        return f"{s}%"
-    except (TypeError, ValueError):
-        return v
 
 
 # Dentro de un st.form, Enter normalmente envia el formulario de una vez
@@ -241,8 +208,36 @@ div[data-testid="stNumberInput"] input {
 </style>
 """
 
+def verificar_password():
+    """Si hay un secret 'app_password' configurado (deploy en la nube),
+    pide contrasena antes de mostrar nada mas. En local, sin ese secret,
+    no pide nada -- ya esta protegido por necesitar credenciales.json."""
+    try:
+        clave_esperada = st.secrets.get("app_password")
+    except Exception:
+        clave_esperada = None
+
+    if not clave_esperada:
+        return True
+    if st.session_state.get("autenticado"):
+        return True
+
+    clave = st.text_input("Contraseña", type="password")
+    if clave:
+        if clave == clave_esperada:
+            st.session_state["autenticado"] = True
+            st.rerun()
+        else:
+            st.error("Contraseña incorrecta.")
+    return False
+
+
 st.markdown("## \U0001F4B0 Control de Prestamos")
 st.caption("Seguimiento de prestamos, pagos e intereses")
+
+if not verificar_password():
+    st.stop()
+
 st.markdown(CAMPOS_MONTO_CSS, unsafe_allow_html=True)
 components.html(ENTER_AVANZA_CAMPO_JS, height=0)
 
@@ -406,12 +401,12 @@ with tab_pago:
                         else:
                             id_prestamo = opciones[etiqueta]
                             prestamo = activos[activos["ID Prestamo"] == id_prestamo].iloc[0]
-                            saldo_anterior = float(prestamo["Saldo pendiente"])
-                            tasa = float(prestamo["Tasa interes (%/periodo)"])
-                            factor = FACTOR_FRECUENCIA.get(prestamo["Frecuencia de pago"], 1)
-                            interes = saldo_anterior * tasa * factor
-                            abono = max(0, monto_pagado - interes)
-                            saldo_nuevo = saldo_anterior - abono
+                            resultado = calcular_pago(
+                                saldo_anterior=float(prestamo["Saldo pendiente"]),
+                                tasa_mensual=float(prestamo["Tasa interes (%/periodo)"]),
+                                frecuencia=prestamo["Frecuencia de pago"],
+                                monto_pagado=monto_pagado,
+                            )
 
                             # Columna C (Cliente) es formula -- no se escribe.
                             ws.update([[id_prestamo]], f"B{row}", value_input_option="USER_ENTERED")
@@ -422,11 +417,7 @@ with tab_pago:
                             st.session_state["ultimo_pago"] = {
                                 "cliente": prestamo["Cliente"],
                                 "fecha": fecha_pago.strftime("%d/%m/%Y"),
-                                "saldo_anterior": saldo_anterior,
-                                "interes": interes,
-                                "monto_pagado": monto_pagado,
-                                "abono": abono,
-                                "saldo_nuevo": saldo_nuevo,
+                                **resultado,
                             }
                             load_df.clear()
                             st.rerun()
