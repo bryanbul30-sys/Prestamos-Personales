@@ -17,11 +17,6 @@ st.set_page_config(page_title="Control de Prestamos", page_icon="\U0001F4B0", la
 FRECUENCIAS = ["Diario", "Semanal", "Quincenal", "Mensual"]
 PAGOS_PREFILL_ROWS = 500
 
-# Vista resumida: solo lo esencial de un vistazo (sin scroll horizontal).
-# El detalle completo (fechas, montos historicos, ID) sigue en el Google
-# Sheet, y tambien disponible aca abajo del todo en un expander opcional.
-PRESTAMOS_COLS_RESUMEN = ["Cliente", "Tasa interes (%/periodo)", "Saldo pendiente", "Estado"]
-
 # Orden completo, usado en el expander "Ver todos los detalles".
 PRESTAMOS_COLS_ORDEN = [
     "Cliente", "Estado", "Saldo pendiente", "Monto prestado",
@@ -38,8 +33,9 @@ PAGOS_COLS_ORDEN = [
 COLUMNAS_DINERO = {
     "Monto prestado", "Saldo pendiente", "Total pagado", "Interes cobrado",
     "Monto pagado", "Saldo anterior", "Interes del periodo", "Abono a capital",
-    "Saldo nuevo",
+    "Saldo nuevo", "Monto",
 }
+COLUMNAS_PORCENTAJE = {"Tasa interes (%/periodo)", "Interés"}
 
 TABLA_CSS = """
 <style>
@@ -87,6 +83,8 @@ def render_tabla(df, orden=None):
             valor = r[c]
             if c in COLUMNAS_DINERO:
                 celdas.append(f'<td class="num">{fmt_money(valor)}</td>')
+            elif c in COLUMNAS_PORCENTAJE:
+                celdas.append(f'<td class="num">{fmt_pct(valor)}</td>')
             else:
                 celdas.append(f"<td>{_celda(valor)}</td>")
         filas.append(f"<tr>{''.join(celdas)}</tr>")
@@ -156,9 +154,23 @@ def eliminar_prestamo(sh, id_prestamo):
 
 
 def fmt_money(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
     try:
         # Miles con punto (formato usado en CR), no con coma.
         return f"₡{float(v):,.0f}".replace(",", ".")
+    except (TypeError, ValueError):
+        return v
+
+
+def fmt_pct(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    try:
+        # La hoja guarda la tasa como decimal (0.1 = 10%).
+        n = float(v) * 100
+        s = f"{n:.1f}".rstrip("0").rstrip(".")
+        return f"{s}%"
     except (TypeError, ValueError):
         return v
 
@@ -286,7 +298,13 @@ with tab_prestamos:
     if prestamos_df.empty:
         st.info("Aun no hay prestamos registrados.")
     else:
-        render_tabla(prestamos_df[PRESTAMOS_COLS_RESUMEN])
+        resumen_df = prestamos_df.copy()
+        resumen_df["Monto"] = (
+            pd.to_numeric(resumen_df["Saldo pendiente"], errors="coerce")
+            * pd.to_numeric(resumen_df["Tasa interes (%/periodo)"], errors="coerce")
+        )
+        resumen_df = resumen_df.rename(columns={"Tasa interes (%/periodo)": "Interés"})
+        render_tabla(resumen_df[["Cliente", "Interés", "Monto", "Saldo pendiente", "Estado"]])
         with st.expander("Ver todos los detalles (fechas, montos historicos, ID)"):
             render_tabla(prestamos_df, PRESTAMOS_COLS_ORDEN)
 
