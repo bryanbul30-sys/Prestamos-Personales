@@ -122,7 +122,8 @@ new MutationObserver(attachAll).observe(doc.body, { childList: true, subtree: tr
 </script>
 """
 
-st.title("\U0001F4B0 Control de Prestamos")
+st.markdown("## \U0001F4B0 Control de Prestamos")
+st.caption("Seguimiento de prestamos, pagos e intereses")
 components.html(ENTER_AVANZA_CAMPO_JS, height=0)
 
 try:
@@ -142,15 +143,32 @@ pagos_df = load_df(config.SHEET_PAGOS)
 
 tab_resumen, tab_prestamos, tab_pago = st.tabs(["Resumen", "Prestamos", "Registrar pago"])
 
+KPIS_FINANCIEROS = [
+    "Total prestado (historico)", "Capital pendiente actual",
+    "Total cobrado (capital+interes)", "Interes total cobrado",
+]
+KPIS_ESTADO = [
+    ("Prestamos activos", "\U0001F7E2"), ("Prestamos atrasados", "\U0001F534"),
+    ("Prestamos pagados", "✅"),
+]
+
 with tab_resumen:
     resumen_ws = sh.worksheet(config.SHEET_RESUMEN)
     kpis = resumen_ws.get("A4:B11")
     if len(kpis) > 1:
-        rows = kpis[1:]
+        datos = dict(kpis[1:])
+
+        st.markdown("##### Resumen financiero")
         cols = st.columns(4)
-        for i, (label, value) in enumerate(rows):
-            display = fmt_money(value) if "Prestado" in label or "cobrado" in label or "pendiente" in label else value
-            cols[i % 4].metric(label, display)
+        for i, label in enumerate(KPIS_FINANCIEROS):
+            if label in datos:
+                cols[i].metric(label, fmt_money(datos[label]))
+
+        st.markdown("##### Estado de prestamos")
+        cols = st.columns(3)
+        for i, (label, icono) in enumerate(KPIS_ESTADO):
+            if label in datos:
+                cols[i].metric(f"{icono} {label}", datos[label])
 
     st.divider()
     if not prestamos_df.empty and "Estado" in prestamos_df.columns:
