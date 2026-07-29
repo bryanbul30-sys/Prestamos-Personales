@@ -37,6 +37,11 @@ COLUMNAS_DINERO = {
 }
 COLUMNAS_PORCENTAJE = {"Tasa interes (%/periodo)", "Interés"}
 
+# La tasa ingresada es siempre mensual; el interes de cada periodo se
+# prorratea segun la frecuencia de pago (mismos dias de referencia que la
+# formula de "Dias max permitidos" en la hoja: mes de 30 dias).
+FACTOR_FRECUENCIA = {"Diario": 1 / 30, "Semanal": 7 / 30, "Quincenal": 15 / 30, "Mensual": 1}
+
 TABLA_CSS = """
 <style>
 .tabla-scroll { overflow-x: auto; margin-bottom: 1rem; }
@@ -299,9 +304,11 @@ with tab_prestamos:
         st.info("Aun no hay prestamos registrados.")
     else:
         resumen_df = prestamos_df.copy()
+        factor = resumen_df["Frecuencia de pago"].map(FACTOR_FRECUENCIA).fillna(1)
         resumen_df["Monto"] = (
             pd.to_numeric(resumen_df["Saldo pendiente"], errors="coerce")
             * pd.to_numeric(resumen_df["Tasa interes (%/periodo)"], errors="coerce")
+            * factor
         )
         resumen_df = resumen_df.rename(columns={"Tasa interes (%/periodo)": "Interés"})
         render_tabla(resumen_df[["Cliente", "Interés", "Monto", "Saldo pendiente", "Estado"]])
@@ -315,7 +322,11 @@ with tab_prestamos:
         cliente = c1.text_input("Cliente")
         fecha_inicio = c2.date_input("Fecha de inicio", value=date.today())
         monto = c1.number_input("Monto prestado (₡)", min_value=0, step=1000)
-        tasa = c2.number_input("Tasa de interes por periodo (%)", min_value=0.0, step=0.5, format="%.2f")
+        tasa = c2.number_input(
+            "Tasa de interes mensual (%)", min_value=0.0, step=0.5, format="%.2f",
+            help="Siempre mensual. Si la frecuencia de pago es Quincenal, Semanal o "
+                 "Diario, el interes de cada pago se prorratea automaticamente.",
+        )
         frecuencia = c1.selectbox("Frecuencia de pago", FRECUENCIAS)
         submitted = st.form_submit_button("Guardar prestamo")
         if submitted:

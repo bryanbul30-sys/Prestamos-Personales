@@ -112,11 +112,20 @@ def setup_pagos(sh):
 
     # F, G, H, I dependen del saldo acumulado de pagos anteriores del MISMO
     # prestamo, asi que se escriben fila por fila (no como ARRAYFORMULA).
+    #
+    # La tasa en Prestamos!E es SIEMPRE mensual, sin importar la frecuencia
+    # de pago del prestamo. El interes de cada pago se prorratea segun esa
+    # frecuencia (mismos dias de referencia que Prestamos!L: Diario=1,
+    # Semanal=7, Quincenal=15, Mensual=30, sobre un mes de 30 dias).
     rows_fgh_i = []
     for row in range(2, PAGOS_PREFILL_ROWS + 1):
         f = (f'=IF(B{row}="","",IFERROR(VLOOKUP(B{row},Prestamos!$A:$D,4,FALSE)'
              f'-SUMIFS($H$1:H{row - 1},$B$1:B{row - 1},B{row}),"ID invalido"))')
-        g = f'=IF(B{row}="","",IF(F{row}="ID invalido","",F{row}*IFERROR(VLOOKUP(B{row},Prestamos!$A:$E,5,FALSE),0)))'
+        frecuencia = f'IFERROR(VLOOKUP(B{row},Prestamos!$A:$F,6,FALSE),"")'
+        factor = (f'IFS({frecuencia}="Diario",1/30,{frecuencia}="Semanal",7/30,'
+                  f'{frecuencia}="Quincenal",15/30,{frecuencia}="Mensual",1,TRUE,1)')
+        g = (f'=IF(B{row}="","",IF(F{row}="ID invalido","",'
+             f'F{row}*IFERROR(VLOOKUP(B{row},Prestamos!$A:$E,5,FALSE),0)*{factor}))')
         h = f'=IF(B{row}="","",IF(F{row}="ID invalido","",MAX(0,E{row}-G{row})))'
         i = f'=IF(B{row}="","",IF(F{row}="ID invalido","",F{row}-H{row}))'
         rows_fgh_i.append([f, g, h, i])
