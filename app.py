@@ -11,7 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 import config
-from calculos import FACTOR_FRECUENCIA, calcular_pago, fmt_money, fmt_pct, siguiente_fila_libre
+from calculos import DIAS_POR_FRECUENCIA, FACTOR_FRECUENCIA, calcular_pago, fmt_money, fmt_pct, siguiente_fila_libre
 from sheets_client import get_spreadsheet
 
 st.set_page_config(page_title="Control de Prestamos", page_icon="\U0001F4B0", layout="wide")
@@ -19,12 +19,14 @@ st.set_page_config(page_title="Control de Prestamos", page_icon="\U0001F4B0", la
 FRECUENCIAS = ["Diario", "Semanal", "Quincenal", "Mensual"]
 PAGOS_PREFILL_ROWS = 500
 
-# Orden completo, usado en el expander "Ver todos los detalles".
+# Orden completo, usado en el expander "Ver todos los detalles". No
+# incluye "Dias max permitidos": es un dato interno (umbral que usa la
+# hoja para calcular el Estado), no algo util para leer directamente.
 PRESTAMOS_COLS_ORDEN = [
     "Cliente", "Estado", "Saldo pendiente", "Monto prestado",
     "Fecha ultimo pago", "ID Prestamo", "Fecha inicio",
     "Tasa interes (%/periodo)", "Frecuencia de pago", "Total pagado",
-    "Interes cobrado", "Dias desde referencia", "Dias max permitidos",
+    "Interes cobrado", "Dias desde referencia",
 ]
 PAGOS_COLS_ORDEN = [
     "Cliente", "Fecha de pago", "Monto pagado", "Saldo nuevo",
@@ -325,10 +327,19 @@ with tab_prestamos:
             * pd.to_numeric(resumen_df["Tasa interes (%/periodo)"], errors="coerce")
             * factor
         )
+        # Proximo pago = fecha del ultimo pago (o inicio, si aun no pago
+        # nada) + dias del ciclo de esa frecuencia.
+        fecha_ref = resumen_df["Fecha ultimo pago"].replace("", pd.NA).fillna(resumen_df["Fecha inicio"])
+        fecha_ref = pd.to_datetime(fecha_ref, format="%d/%m/%Y", errors="coerce")
+        dias_ciclo = resumen_df["Frecuencia de pago"].map(DIAS_POR_FRECUENCIA).fillna(30)
+        resumen_df["Proximo pago"] = (
+            fecha_ref + pd.to_timedelta(dias_ciclo, unit="D")
+        ).dt.strftime("%d/%m/%Y")
+
         resumen_df = resumen_df.rename(columns={"Tasa interes (%/periodo)": "Interés"})
-        render_tabla(resumen_df[["Cliente", "Interés", "Monto", "Saldo pendiente", "Estado"]])
+        render_tabla(resumen_df[["Cliente", "Saldo pendiente", "Interés", "Monto", "Proximo pago", "Estado"]])
         with st.expander("Ver todos los detalles (fechas, montos historicos, ID)"):
-            render_tabla(prestamos_df, PRESTAMOS_COLS_ORDEN)
+            render_tabla(prestamos_df.drop(columns=["Dias max permitidos"]), PRESTAMOS_COLS_ORDEN)
 
     st.divider()
     st.subheader("Registrar nuevo prestamo")
