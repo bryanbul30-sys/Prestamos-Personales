@@ -78,7 +78,9 @@ def calcular_pago(saldo_anterior, tasa_mensual, frecuencia, monto_pagado):
     interes sobre interes). El abono nunca supera el saldo pendiente
     (si pagan de mas, el sobrante no se resta del saldo).
     """
-    interes = saldo_anterior * tasa_mensual * factor_frecuencia(frecuencia)
+    # Redondeado a colones enteros -- no tiene sentido cobrar centavos, y
+    # evita que se acumulen residuos fraccionarios de un pago a otro.
+    interes = round(saldo_anterior * tasa_mensual * factor_frecuencia(frecuencia))
     abono = min(saldo_anterior, max(0, monto_pagado - interes))
     saldo_nuevo = saldo_anterior - abono
     return {

@@ -75,8 +75,10 @@ def formula_fila_pagos(row):
          f'-SUMIFS($H$1:H{row - 1},$B$1:B{row - 1},B{row}),"ID invalido"))')
     frecuencia = f'IFERROR(VLOOKUP(B{row},Prestamos!$A:$F,6,FALSE),"")'
     factor = _ifs_factor_frecuencia(frecuencia)
+    # ROUND a colones enteros -- igual que calcular_pago() en calculos.py,
+    # para que no queden centavos ni se desalineen los dos calculos.
     g = (f'=IF(B{row}="","",IF(F{row}="ID invalido","",'
-         f'F{row}*IFERROR(VLOOKUP(B{row},Prestamos!$A:$E,5,FALSE),0)*{factor}))')
+         f'ROUND(F{row}*IFERROR(VLOOKUP(B{row},Prestamos!$A:$E,5,FALSE),0)*{factor},0)))')
     h = f'=IF(B{row}="","",IF(F{row}="ID invalido","",MAX(0,E{row}-G{row})))'
     i = f'=IF(B{row}="","",IF(F{row}="ID invalido","",F{row}-H{row}))'
     return [f, g, h, i]

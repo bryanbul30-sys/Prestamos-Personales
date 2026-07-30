@@ -34,10 +34,17 @@ def test_calcular_pago_semanal_y_diario():
     # El prorrateo es "1 dividido entre pagos por mes", no por dias
     # calendario: semanal se divide entre 4 (no entre 30/7).
     semanal = calcular_pago(100_000, 0.10, "Semanal", 20_000)
-    assert semanal["interes"] == pytest.approx(100_000 * 0.10 / 4)
+    assert semanal["interes"] == round(100_000 * 0.10 / 4)
 
+    # 100.000 * 10% / 30 = 333.33... -> se redondea a colones enteros.
     diario = calcular_pago(100_000, 0.10, "Diario", 20_000)
-    assert diario["interes"] == pytest.approx(100_000 * 0.10 / 30)
+    assert diario["interes"] == 333
+
+
+def test_calcular_pago_redondea_el_interes_a_colones_enteros():
+    r = calcular_pago(saldo_anterior=100_000, tasa_mensual=0.10, frecuencia="Diario", monto_pagado=20_000)
+    assert isinstance(r["interes"], int)
+    assert r["abono"] == 20_000 - 333
 
 
 def test_calcular_pago_no_cubre_interes_no_abona_capital():

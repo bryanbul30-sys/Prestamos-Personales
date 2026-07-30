@@ -285,36 +285,78 @@ def _panel_pago(sh, fila):
 
 
 def _panel_editar(sh, fila):
+    """Edita como esta el prestamo AHORA (cliente, saldo pendiente, tasa,
+    frecuencia) -- no los datos originales de cuando se dio el prestamo.
+
+    Los pagos ya registrados calculan su interes con un VLOOKUP en vivo a
+    Prestamos!D (Monto prestado) y Prestamos!E (Tasa) -- si se editaran
+    esas columnas en un prestamo que YA tiene pagos, el interes de todo
+    ese historial se recalcularia con el valor nuevo (se probo en vivo:
+    corrompe los montos ya cobrados). Por eso, si ya tiene pagos:
+    - Tasa y frecuencia quedan bloqueadas (no hay forma segura de
+      cambiarlas sin afectar el historial con esta arquitectura).
+    - El saldo no se ajusta tocando el Monto prestado, sino agregando un
+      "ajuste" como fila nueva de Pagos con interes 0 y el abono a
+      capital necesario para que el saldo quede en lo que se pida,
+      dejando los pagos anteriores intactos.
+    Si el prestamo NO tiene pagos todavia, no hay riesgo y se edita todo
+    directo."""
     id_prestamo = fila["ID Prestamo"]
-    fecha_actual = (
-        datetime.strptime(fila["Fecha inicio"], "%d/%m/%Y").date()
-        if fila["Fecha inicio"] else date.today()
-    )
+    saldo_actual = float(fila["Saldo pendiente"])
+    tiene_pagos = bool(fila["Fecha ultimo pago"])
+
     with st.form(f"editar_{id_prestamo}", clear_on_submit=False):
+        st.caption("Edita como esta el prestamo ahora mismo (no los datos de cuando se dio).")
         c1, c2 = st.columns(2)
         cliente = c1.text_input("Cliente", value=fila["Cliente"])
-        fecha_inicio = c2.date_input("Fecha de inicio", value=fecha_actual)
-        monto = c1.number_input(
-            "Monto prestado (₡)", min_value=0, step=1000, value=int(fila["Monto prestado"]),
+        saldo_nuevo = c2.number_input(
+            "Saldo pendiente actual (₡)", min_value=0, step=1000, value=round(saldo_actual),
         )
-        tasa = c2.number_input(
+        tasa = c1.number_input(
             "Tasa de interes mensual (%)", min_value=0.0, step=0.5, format="%.2f",
-            value=float(fila["Tasa interes (%/periodo)"]) * 100,
+            value=float(fila["Tasa interes (%/periodo)"]) * 100, disabled=tiene_pagos,
         )
-        frecuencia = c1.selectbox(
+        frecuencia = c2.selectbox(
             "Frecuencia de pago", FRECUENCIAS, index=FRECUENCIAS.index(fila["Frecuencia de pago"]),
+            disabled=tiene_pagos,
         )
+        if tiene_pagos:
+            st.caption(
+                "La tasa y la frecuencia no se pueden cambiar porque este prestamo ya tiene "
+                "pagos -- modificarlas recalcularia el interes de los pagos anteriores, no solo "
+                "los futuros."
+            )
         guardar = st.form_submit_button("Guardar cambios")
         if guardar:
-            if not cliente or monto <= 0:
-                st.warning("Completa al menos Cliente y Monto prestado.")
+            if not cliente:
+                st.warning("Completa el nombre del cliente.")
             else:
                 ws = sh.worksheet(config.SHEET_PRESTAMOS)
                 celda = ws.find(id_prestamo, in_column=1)
-                ws.update(
-                    [[cliente, fecha_inicio.strftime("%Y-%m-%d"), monto, tasa / 100, frecuencia]],
-                    f"B{celda.row}:F{celda.row}", value_input_option="USER_ENTERED",
-                )
+
+                if not tiene_pagos:
+                    # Sin pagos todavia: no hay historial que se pueda
+                    # desalinear, se edita todo directo.
+                    fecha_inicio_actual = datetime.strptime(fila["Fecha inicio"], "%d/%m/%Y").strftime("%Y-%m-%d")
+                    ws.update(
+                        [[cliente, fecha_inicio_actual, saldo_nuevo, tasa / 100, frecuencia]],
+                        f"B{celda.row}:F{celda.row}", value_input_option="USER_ENTERED",
+                    )
+                else:
+                    ws.update([[cliente]], f"B{celda.row}", value_input_option="USER_ENTERED")
+                    if round(saldo_nuevo) != round(saldo_actual):
+                        ws_pg = sh.worksheet(config.SHEET_PAGOS)
+                        row_pg = next_row(ws_pg, "B")
+                        ajuste_a_capital = saldo_actual - saldo_nuevo
+                        ws_pg.update([[id_prestamo]], f"B{row_pg}", value_input_option="USER_ENTERED")
+                        ws_pg.update(
+                            [[date.today().strftime("%Y-%m-%d"), 0]],
+                            f"D{row_pg}:E{row_pg}", value_input_option="USER_ENTERED",
+                        )
+                        ws_pg.update(
+                            [[saldo_actual, 0, ajuste_a_capital, saldo_nuevo]],
+                            f"F{row_pg}:I{row_pg}", value_input_option="USER_ENTERED",
+                        )
                 st.success("Prestamo actualizado.")
                 st.session_state["panel_abierto"] = None
                 load_df.clear()
@@ -517,7 +559,7 @@ with tab_prestamos:
             pd.to_numeric(base_df["Saldo pendiente"], errors="coerce")
             * pd.to_numeric(base_df["Tasa interes (%/periodo)"], errors="coerce")
             * factor
-        )
+        ).round()
         # Proximo pago = siguiente fecha fija de calendario (15/30, etc.)
         # despues del ultimo pago (o del inicio, si aun no pago nada).
         fecha_ref = base_df["Fecha ultimo pago"].replace("", pd.NA).fillna(base_df["Fecha inicio"])
