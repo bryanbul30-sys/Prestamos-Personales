@@ -262,18 +262,21 @@ def _panel_pago(sh, fila):
                         [[fecha_pago.strftime("%Y-%m-%d"), monto_pagado]],
                         f"D{row}:E{row}", value_input_option="USER_ENTERED",
                     )
-                    if solo_capital:
-                        # F:I normalmente son formulas que cobran interes
-                        # siempre -- para un abono extra se sobreescriben
-                        # con los valores fijos calculados arriba (interes
-                        # en 0), asi esta fila puntual no cobra interes.
-                        ws.update(
-                            [[
-                                resultado["saldo_anterior"], resultado["interes"],
-                                resultado["abono"], resultado["saldo_nuevo"],
-                            ]],
-                            f"F{row}:I{row}", value_input_option="USER_ENTERED",
-                        )
+                    # F:I se escriben como valores fijos (no se dejan como
+                    # formula) para "congelar" el interes con la tasa de
+                    # HOY. Si no se hiciera asi, la formula original
+                    # recalcularia este pago con la tasa que tenga el
+                    # prestamo en el futuro (se probo en vivo: si se
+                    # cambia la tasa despues, el interes de pagos viejos
+                    # cambia con ella). Congelando, se puede renegociar la
+                    # tasa de un prestamo sin alterar lo ya cobrado.
+                    ws.update(
+                        [[
+                            resultado["saldo_anterior"], resultado["interes"],
+                            resultado["abono"], resultado["saldo_nuevo"],
+                        ]],
+                        f"F{row}:I{row}", value_input_option="USER_ENTERED",
+                    )
                     st.session_state["ultimo_pago"] = {
                         "id_prestamo": id_prestamo,
                         "cliente": fila["Cliente"],
@@ -288,19 +291,16 @@ def _panel_editar(sh, fila):
     """Edita como esta el prestamo AHORA (cliente, saldo pendiente, tasa,
     frecuencia) -- no los datos originales de cuando se dio el prestamo.
 
-    Los pagos ya registrados calculan su interes con un VLOOKUP en vivo a
-    Prestamos!D (Monto prestado) y Prestamos!E (Tasa) -- si se editaran
-    esas columnas en un prestamo que YA tiene pagos, el interes de todo
-    ese historial se recalcularia con el valor nuevo (se probo en vivo:
-    corrompe los montos ya cobrados). Por eso, si ya tiene pagos:
-    - Tasa y frecuencia quedan bloqueadas (no hay forma segura de
-      cambiarlas sin afectar el historial con esta arquitectura).
-    - El saldo no se ajusta tocando el Monto prestado, sino agregando un
-      "ajuste" como fila nueva de Pagos con interes 0 y el abono a
-      capital necesario para que el saldo quede en lo que se pida,
-      dejando los pagos anteriores intactos.
-    Si el prestamo NO tiene pagos todavia, no hay riesgo y se edita todo
-    directo."""
+    Tasa y frecuencia se pueden editar siempre: los pagos ya registrados
+    guardan su interes como valor fijo en el momento en que se hicieron
+    (ver _panel_pago), no como formula que consulte la tasa actual --
+    asi que cambiarla aca solo afecta los pagos que se registren de ahora
+    en adelante (por ejemplo, para renegociar la tasa de un prestamo).
+
+    El saldo, si el prestamo ya tiene pagos, no se ajusta tocando el
+    Monto prestado sino agregando un "ajuste" como fila nueva de Pagos
+    con interes 0 y el abono a capital necesario para llegar al saldo
+    pedido -- mantiene "Monto prestado" como el monto original real."""
     id_prestamo = fila["ID Prestamo"]
     saldo_actual = float(fila["Saldo pendiente"])
     tiene_pagos = bool(fila["Fecha ultimo pago"])
@@ -314,18 +314,13 @@ def _panel_editar(sh, fila):
         )
         tasa = c1.number_input(
             "Tasa de interes mensual (%)", min_value=0.0, step=0.5, format="%.2f",
-            value=float(fila["Tasa interes (%/periodo)"]) * 100, disabled=tiene_pagos,
+            value=float(fila["Tasa interes (%/periodo)"]) * 100,
+            help="Los pagos ya hechos quedan con la tasa que tenian en su momento. "
+                 "Cambiar esto (p.ej. para renegociar) solo afecta los pagos nuevos.",
         )
         frecuencia = c2.selectbox(
             "Frecuencia de pago", FRECUENCIAS, index=FRECUENCIAS.index(fila["Frecuencia de pago"]),
-            disabled=tiene_pagos,
         )
-        if tiene_pagos:
-            st.caption(
-                "La tasa y la frecuencia no se pueden cambiar porque este prestamo ya tiene "
-                "pagos -- modificarlas recalcularia el interes de los pagos anteriores, no solo "
-                "los futuros."
-            )
         guardar = st.form_submit_button("Guardar cambios")
         if guardar:
             if not cliente:
@@ -335,8 +330,8 @@ def _panel_editar(sh, fila):
                 celda = ws.find(id_prestamo, in_column=1)
 
                 if not tiene_pagos:
-                    # Sin pagos todavia: no hay historial que se pueda
-                    # desalinear, se edita todo directo.
+                    # Sin pagos todavia: el saldo se ajusta directo via
+                    # Monto prestado (no hay historial de por medio).
                     fecha_inicio_actual = datetime.strptime(fila["Fecha inicio"], "%d/%m/%Y").strftime("%Y-%m-%d")
                     ws.update(
                         [[cliente, fecha_inicio_actual, saldo_nuevo, tasa / 100, frecuencia]],
@@ -344,6 +339,10 @@ def _panel_editar(sh, fila):
                     )
                 else:
                     ws.update([[cliente]], f"B{celda.row}", value_input_option="USER_ENTERED")
+                    ws.update(
+                        [[tasa / 100, frecuencia]],
+                        f"E{celda.row}:F{celda.row}", value_input_option="USER_ENTERED",
+                    )
                     if round(saldo_nuevo) != round(saldo_actual):
                         ws_pg = sh.worksheet(config.SHEET_PAGOS)
                         row_pg = next_row(ws_pg, "B")

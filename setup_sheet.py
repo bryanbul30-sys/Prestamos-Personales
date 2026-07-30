@@ -84,6 +84,29 @@ def formula_fila_pagos(row):
     return [f, g, h, i]
 
 
+def congelar_pagos_existentes(sh):
+    """Convierte F:I (Saldo anterior, Interes, Abono, Saldo nuevo) de los
+    pagos ya registrados de formula a valores fijos, tomando el valor
+    actual de cada celda.
+
+    Necesario para que app.py pueda dejar editar la tasa/frecuencia de un
+    prestamo sin que eso recalcule retroactivamente el interes de pagos
+    que ya se hicieron (las formulas originales de setup_pagos() hacen un
+    VLOOKUP en vivo a la tasa actual). Los pagos que registra la app ya
+    se guardan congelados desde el principio (ver _panel_pago en
+    app.py); esto es para migrar los que se cargaron antes de ese
+    cambio, o cualquier pago metido a mano en la hoja."""
+    ws = sh.worksheet(config.SHEET_PAGOS)
+    valores_b = ws.col_values(2)
+    filas = [i for i, v in enumerate(valores_b, start=1) if i > 1 and str(v).strip() != ""]
+    if not filas:
+        return 0
+    primera, ultima = filas[0], filas[-1]
+    valores_fi = ws.get(f"F{primera}:I{ultima}", value_render_option="UNFORMATTED_VALUE")
+    ws.update(valores_fi, f"F{primera}:I{ultima}", value_input_option="USER_ENTERED")
+    return len(filas)
+
+
 def get_or_create_ws(sh, title, rows, cols):
     try:
         ws = sh.worksheet(title)
