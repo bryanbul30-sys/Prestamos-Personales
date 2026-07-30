@@ -4,7 +4,7 @@ Corre con:  streamlit run app.py
 """
 import html
 import urllib.parse
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 import streamlit as st
@@ -253,6 +253,43 @@ def _panel_pago(sh, fila):
                     st.rerun()
 
 
+def _panel_editar(sh, fila):
+    id_prestamo = fila["ID Prestamo"]
+    fecha_actual = (
+        datetime.strptime(fila["Fecha inicio"], "%d/%m/%Y").date()
+        if fila["Fecha inicio"] else date.today()
+    )
+    with st.form(f"editar_{id_prestamo}", clear_on_submit=False):
+        c1, c2 = st.columns(2)
+        cliente = c1.text_input("Cliente", value=fila["Cliente"])
+        fecha_inicio = c2.date_input("Fecha de inicio", value=fecha_actual)
+        monto = c1.number_input(
+            "Monto prestado (₡)", min_value=0, step=1000, value=int(fila["Monto prestado"]),
+        )
+        tasa = c2.number_input(
+            "Tasa de interes mensual (%)", min_value=0.0, step=0.5, format="%.2f",
+            value=float(fila["Tasa interes (%/periodo)"]) * 100,
+        )
+        frecuencia = c1.selectbox(
+            "Frecuencia de pago", FRECUENCIAS, index=FRECUENCIAS.index(fila["Frecuencia de pago"]),
+        )
+        guardar = st.form_submit_button("Guardar cambios")
+        if guardar:
+            if not cliente or monto <= 0:
+                st.warning("Completa al menos Cliente y Monto prestado.")
+            else:
+                ws = sh.worksheet(config.SHEET_PRESTAMOS)
+                celda = ws.find(id_prestamo, in_column=1)
+                ws.update(
+                    [[cliente, fecha_inicio.strftime("%Y-%m-%d"), monto, tasa / 100, frecuencia]],
+                    f"B{celda.row}:F{celda.row}", value_input_option="USER_ENTERED",
+                )
+                st.success("Prestamo actualizado.")
+                st.session_state["panel_abierto"] = None
+                load_df.clear()
+                st.rerun()
+
+
 def _panel_detalle(sh, fila, pagos_df):
     id_prestamo = fila["ID Prestamo"]
     d1, d2, d3 = st.columns(3)
@@ -476,15 +513,15 @@ with tab_prestamos:
         if visibles.empty:
             st.info("No hay prestamos activos (todos estan pagados).")
         else:
-            hcols = st.columns([2.2, 1.5, 1, 1.5, 1.5, 0.6, 0.6])
-            for h, texto in zip(hcols, ["Cliente", "Saldo pendiente", "Interes", "Monto", "Proximo pago", "", ""]):
+            hcols = st.columns([2.1, 1.4, 0.9, 1.4, 1.4, 0.5, 0.5, 0.5])
+            for h, texto in zip(hcols, ["Cliente", "Saldo pendiente", "Interes", "Monto", "Proximo pago", "", "", ""]):
                 h.markdown(f"**{texto}**")
 
             for _, fila in visibles.iterrows():
                 id_prestamo = fila["ID Prestamo"]
                 key = f"fila_{id_prestamo}"
                 with st.container(key=key, border=True):
-                    c1, c2, c3, c4, c5, c6, c7 = st.columns([2.2, 1.5, 1, 1.5, 1.5, 0.6, 0.6])
+                    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([2.1, 1.4, 0.9, 1.4, 1.4, 0.5, 0.5, 0.5])
                     c1.markdown(f"**{fila['Cliente']}**")
                     c2.markdown(fmt_money(fila["Saldo pendiente"]))
                     c3.markdown(fmt_pct(fila["Tasa interes (%/periodo)"]))
@@ -492,6 +529,7 @@ with tab_prestamos:
                     c5.markdown(fila["Proximo pago"])
                     ver_click = c6.button("👁️", key=f"ver_{id_prestamo}", help="Ver detalle")
                     pagar_click = c7.button("💰", key=f"pagar_{id_prestamo}", help="Registrar pago")
+                    editar_click = c8.button("✏️", key=f"editar_{id_prestamo}", help="Editar prestamo")
 
                     panel = st.session_state.get("panel_abierto")
                     if panel and panel[0] == id_prestamo:
@@ -500,6 +538,8 @@ with tab_prestamos:
                             _panel_detalle(sh, fila, pagos_df)
                         elif panel[1] == "pago":
                             _panel_pago(sh, fila)
+                        elif panel[1] == "editar":
+                            _panel_editar(sh, fila)
 
                 color = CATEGORIA_COLOR.get(fila["Categoria"], "transparent")
                 st.markdown(
@@ -507,8 +547,8 @@ with tab_prestamos:
                     unsafe_allow_html=True,
                 )
 
-                if ver_click or pagar_click:
-                    tipo = "detalle" if ver_click else "pago"
+                if ver_click or pagar_click or editar_click:
+                    tipo = "detalle" if ver_click else ("pago" if pagar_click else "editar")
                     actual = st.session_state.get("panel_abierto")
                     st.session_state["panel_abierto"] = None if actual == (id_prestamo, tipo) else (id_prestamo, tipo)
                     st.rerun()
