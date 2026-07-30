@@ -11,7 +11,15 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 import config
-from calculos import DIAS_POR_FRECUENCIA, FACTOR_FRECUENCIA, calcular_pago, fmt_money, fmt_pct, siguiente_fila_libre
+from calculos import (
+    DIAS_POR_FRECUENCIA,
+    FACTOR_FRECUENCIA,
+    calcular_pago,
+    clasificar_prestamo,
+    fmt_money,
+    fmt_pct,
+    siguiente_fila_libre,
+)
 from sheets_client import get_spreadsheet
 
 st.set_page_config(page_title="Control de Prestamos", page_icon="\U0001F4B0", layout="wide")
@@ -41,11 +49,22 @@ COLUMNAS_DINERO = {
 }
 COLUMNAS_PORCENTAJE = {"Tasa interes (%/periodo)", "Interés"}
 
-# Colores de la etiqueta de Estado: (fondo, texto).
+# Colores de la etiqueta de Estado (usado en el detalle expandido).
 ESTADO_COLORES = {
     "Al dia": ("rgba(34, 197, 94, 0.15)", "#16a34a"),
     "Atrasado": ("rgba(239, 68, 68, 0.15)", "#dc2626"),
     "Pagado": ("rgba(59, 130, 246, 0.15)", "#2563eb"),
+}
+
+# Color de fondo de cada fila en la lista de prestamos, segun
+# clasificar_prestamo(): verde = nuevo sin pagos, morado = ya viene
+# pagando, naranja = atraso leve, rojo = atraso grave. Los prestamos
+# pagados no aparecen en la lista principal (van al archivo).
+CATEGORIA_COLOR = {
+    "nuevo": "rgba(34, 197, 94, 0.14)",
+    "con_pagos": "rgba(168, 85, 247, 0.14)",
+    "atrasado_leve": "rgba(249, 115, 22, 0.16)",
+    "atrasado_grave": "rgba(239, 68, 68, 0.16)",
 }
 
 TABLA_CSS = """
@@ -169,6 +188,111 @@ def eliminar_prestamo(sh, id_prestamo):
         ws_pg.batch_clear(rangos)
 
 
+def _mostrar_mensaje_whatsapp(pago):
+    st.success("Pago guardado.")
+    mensaje = (
+        f"Hola {pago['cliente']}\n\n"
+        f"Resumen de tu pago del {pago['fecha']}:\n"
+        f"Saldo anterior: {fmt_money(pago['saldo_anterior'])}\n"
+        f"Interes: {fmt_money(pago['interes'])}\n"
+        f"Monto pagado: {fmt_money(pago['monto_pagado'])}\n"
+        f"Abono a capital: {fmt_money(pago['abono'])}\n"
+        f"Saldo actual: {fmt_money(pago['saldo_nuevo'])}"
+    )
+    st.text_area("Mensaje para compartir", mensaje, height=170, key=f"msg_{pago['id_prestamo']}")
+    link_wsp = "https://wa.me/?text=" + urllib.parse.quote(mensaje)
+    cwsp, ccerrar = st.columns([1, 1])
+    cwsp.link_button("📲 Enviar por WhatsApp", link_wsp)
+    if ccerrar.button("Cerrar", key=f"cerrar_{pago['id_prestamo']}"):
+        del st.session_state["ultimo_pago"]
+        st.session_state["panel_abierto"] = None
+        st.rerun()
+
+
+def _panel_pago(sh, fila):
+    id_prestamo = fila["ID Prestamo"]
+    if st.session_state.get("ultimo_pago", {}).get("id_prestamo") == id_prestamo:
+        _mostrar_mensaje_whatsapp(st.session_state["ultimo_pago"])
+        return
+
+    with st.form(f"pago_{id_prestamo}", clear_on_submit=True):
+        fecha_pago = st.date_input("Fecha de pago", value=date.today(), key=f"fecha_{id_prestamo}")
+        monto_pagado = st.number_input("Monto pagado (₡)", min_value=0, step=1000, key=f"monto_{id_prestamo}")
+        submitted = st.form_submit_button("Guardar pago")
+        if submitted:
+            if monto_pagado <= 0:
+                st.warning("El monto pagado debe ser mayor a cero.")
+            else:
+                ws = sh.worksheet(config.SHEET_PAGOS)
+                row = next_row(ws, "B")
+                if row > PAGOS_PREFILL_ROWS:
+                    st.error(
+                        f"Se alcanzo el limite de {PAGOS_PREFILL_ROWS} pagos precargados. "
+                        "Pideme que extienda las formulas de la hoja Pagos."
+                    )
+                else:
+                    resultado = calcular_pago(
+                        saldo_anterior=float(fila["Saldo pendiente"]),
+                        tasa_mensual=float(fila["Tasa interes (%/periodo)"]),
+                        frecuencia=fila["Frecuencia de pago"],
+                        monto_pagado=monto_pagado,
+                    )
+                    # Columna C (Cliente) es formula -- no se escribe.
+                    ws.update([[id_prestamo]], f"B{row}", value_input_option="USER_ENTERED")
+                    ws.update(
+                        [[fecha_pago.strftime("%Y-%m-%d"), monto_pagado]],
+                        f"D{row}:E{row}", value_input_option="USER_ENTERED",
+                    )
+                    st.session_state["ultimo_pago"] = {
+                        "id_prestamo": id_prestamo,
+                        "cliente": fila["Cliente"],
+                        "fecha": fecha_pago.strftime("%d/%m/%Y"),
+                        **resultado,
+                    }
+                    load_df.clear()
+                    st.rerun()
+
+
+def _panel_detalle(sh, fila, pagos_df):
+    id_prestamo = fila["ID Prestamo"]
+    d1, d2, d3 = st.columns(3)
+    d1.metric("Monto prestado", fmt_money(fila["Monto prestado"]))
+    d2.metric("Total pagado", fmt_money(fila["Total pagado"]))
+    d3.metric("Interes cobrado", fmt_money(fila["Interes cobrado"]))
+    st.caption(
+        f"ID: {id_prestamo} · Inicio: {fila['Fecha inicio']} · "
+        f"Frecuencia: {fila['Frecuencia de pago']} · "
+        f"Ultimo pago: {fila['Fecha ultimo pago'] or 'aun no paga'}"
+    )
+
+    historial = pagos_df[pagos_df["ID Prestamo"] == id_prestamo] if not pagos_df.empty else pagos_df
+    if historial.empty:
+        st.caption("Todavia no tiene pagos registrados.")
+    else:
+        render_tabla(historial, PAGOS_COLS_ORDEN)
+
+    if st.session_state.get("confirmar_borrado") == id_prestamo:
+        st.warning(
+            f"Esto elimina el prestamo {id_prestamo} y todos sus pagos registrados. "
+            "No se puede deshacer. ¿Confirmas?"
+        )
+        cconf, ccancel = st.columns(2)
+        if cconf.button("Si, eliminar definitivamente", key=f"conf_del_{id_prestamo}", type="primary"):
+            eliminar_prestamo(sh, id_prestamo)
+            st.session_state.pop("confirmar_borrado", None)
+            st.session_state["panel_abierto"] = None
+            load_df.clear()
+            st.success(f"Prestamo {id_prestamo} eliminado.")
+            st.rerun()
+        if ccancel.button("Cancelar", key=f"canc_del_{id_prestamo}"):
+            st.session_state.pop("confirmar_borrado", None)
+            st.rerun()
+    else:
+        if st.button("🗑️ Eliminar este prestamo", key=f"del_{id_prestamo}"):
+            st.session_state["confirmar_borrado"] = id_prestamo
+            st.rerun()
+
+
 # Dentro de un st.form, Enter normalmente envia el formulario de una vez
 # (comportamiento nativo de <form> en HTML), sin importar en que campo este
 # el cursor. Esto hace que avance al siguiente campo de texto/numero en vez
@@ -277,7 +401,7 @@ except Exception as e:
 prestamos_df = load_df(config.SHEET_PRESTAMOS)
 pagos_df = load_df(config.SHEET_PAGOS)
 
-tab_resumen, tab_prestamos, tab_pago = st.tabs(["Resumen", "Prestamos", "Registrar pago"])
+tab_resumen, tab_prestamos = st.tabs(["Resumen", "Prestamos"])
 
 KPIS_FINANCIEROS = [
     "Total prestado (historico)", "Capital pendiente actual",
@@ -316,165 +440,114 @@ with tab_resumen:
             st.success("Ningun prestamo atrasado ahora mismo.")
 
 with tab_prestamos:
-    st.subheader("Prestamos registrados")
     if prestamos_df.empty:
         st.info("Aun no hay prestamos registrados.")
     else:
-        resumen_df = prestamos_df.copy()
-        factor = resumen_df["Frecuencia de pago"].map(FACTOR_FRECUENCIA).fillna(1)
-        resumen_df["Monto"] = (
-            pd.to_numeric(resumen_df["Saldo pendiente"], errors="coerce")
-            * pd.to_numeric(resumen_df["Tasa interes (%/periodo)"], errors="coerce")
+        base_df = prestamos_df.copy()
+        factor = base_df["Frecuencia de pago"].map(FACTOR_FRECUENCIA).fillna(1)
+        base_df["Monto"] = (
+            pd.to_numeric(base_df["Saldo pendiente"], errors="coerce")
+            * pd.to_numeric(base_df["Tasa interes (%/periodo)"], errors="coerce")
             * factor
         )
         # Proximo pago = fecha del ultimo pago (o inicio, si aun no pago
         # nada) + dias del ciclo de esa frecuencia.
-        fecha_ref = resumen_df["Fecha ultimo pago"].replace("", pd.NA).fillna(resumen_df["Fecha inicio"])
+        fecha_ref = base_df["Fecha ultimo pago"].replace("", pd.NA).fillna(base_df["Fecha inicio"])
         fecha_ref = pd.to_datetime(fecha_ref, format="%d/%m/%Y", errors="coerce")
-        dias_ciclo = resumen_df["Frecuencia de pago"].map(DIAS_POR_FRECUENCIA).fillna(30)
-        resumen_df["Proximo pago"] = (
-            fecha_ref + pd.to_timedelta(dias_ciclo, unit="D")
-        ).dt.strftime("%d/%m/%Y")
+        dias_ciclo = base_df["Frecuencia de pago"].map(DIAS_POR_FRECUENCIA).fillna(30)
+        base_df["Proximo pago"] = (fecha_ref + pd.to_timedelta(dias_ciclo, unit="D")).dt.strftime("%d/%m/%Y")
 
-        resumen_df = resumen_df.rename(columns={"Tasa interes (%/periodo)": "Interés"})
-        render_tabla(resumen_df[["Cliente", "Saldo pendiente", "Interés", "Monto", "Proximo pago", "Estado"]])
-        with st.expander("Ver todos los detalles (fechas, montos historicos, ID)"):
-            render_tabla(prestamos_df.drop(columns=["Dias max permitidos"]), PRESTAMOS_COLS_ORDEN)
+        dias_atraso = (
+            pd.to_numeric(base_df["Dias desde referencia"], errors="coerce")
+            - pd.to_numeric(base_df["Dias max permitidos"], errors="coerce")
+        ).fillna(0)
+        tiene_pagos = base_df["Fecha ultimo pago"] != ""
+        base_df["Categoria"] = [
+            clasificar_prestamo(estado, da, tp)
+            for estado, da, tp in zip(base_df["Estado"], dias_atraso, tiene_pagos)
+        ]
 
-    st.divider()
-    st.subheader("Registrar nuevo prestamo")
-    with st.form("nuevo_prestamo", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        cliente = c1.text_input("Cliente")
-        fecha_inicio = c2.date_input("Fecha de inicio", value=date.today())
-        monto = c1.number_input("Monto prestado (₡)", min_value=0, step=1000)
-        tasa = c2.number_input(
-            "Tasa de interes mensual (%)", min_value=0.0, step=0.5, format="%.2f",
-            help="Siempre mensual. Si la frecuencia de pago es Quincenal, Semanal o "
-                 "Diario, el interes de cada pago se prorratea automaticamente.",
-        )
-        frecuencia = c1.selectbox("Frecuencia de pago", FRECUENCIAS)
-        submitted = st.form_submit_button("Guardar prestamo")
-        if submitted:
-            if not cliente or monto <= 0:
-                st.warning("Completa al menos Cliente y Monto prestado.")
-            else:
-                ws = sh.worksheet(config.SHEET_PRESTAMOS)
-                row = next_row(ws, "B")
-                ws.update(
-                    [[cliente, fecha_inicio.strftime("%Y-%m-%d"), monto, tasa / 100, frecuencia]],
-                    f"B{row}:F{row}", value_input_option="USER_ENTERED",
-                )
-                st.success(f"Prestamo de {cliente} guardado.")
-                load_df.clear()
-                st.rerun()
+        visibles = base_df[base_df["Estado"] != "Pagado"].reset_index(drop=True)
+        pagados = base_df[base_df["Estado"] == "Pagado"].reset_index(drop=True)
 
-    if not prestamos_df.empty:
-        st.divider()
-        st.subheader("Eliminar prestamo")
-        opciones_borrar = {
-            f"{r['ID Prestamo']} - {r['Cliente']} (saldo {fmt_money(r['Saldo pendiente'])})": r["ID Prestamo"]
-            for _, r in prestamos_df.iterrows()
-        }
-        etiqueta_borrar = st.selectbox("Prestamo a eliminar", list(opciones_borrar.keys()))
-        id_borrar = opciones_borrar[etiqueta_borrar]
-
-        if st.session_state.get("confirmar_borrado") == id_borrar:
-            st.warning(
-                f"Esto elimina el prestamo {id_borrar} y todos sus pagos registrados. "
-                "No se puede deshacer. ¿Confirmas?"
-            )
-            cconf, ccancel = st.columns(2)
-            if cconf.button("Si, eliminar definitivamente", type="primary"):
-                eliminar_prestamo(sh, id_borrar)
-                st.session_state.pop("confirmar_borrado", None)
-                load_df.clear()
-                st.success(f"Prestamo {id_borrar} eliminado.")
-                st.rerun()
-            if ccancel.button("Cancelar"):
-                st.session_state.pop("confirmar_borrado", None)
-                st.rerun()
-        else:
-            if st.button("Eliminar este prestamo"):
-                st.session_state["confirmar_borrado"] = id_borrar
-                st.rerun()
-
-with tab_pago:
-    st.subheader("Registrar pago recibido")
-    if prestamos_df.empty:
-        st.info("Primero registra al menos un prestamo en la pestana Prestamos.")
-    else:
-        activos = prestamos_df[prestamos_df["Estado"] != "Pagado"] if "Estado" in prestamos_df.columns else prestamos_df
-        opciones = {
-            f"{r['ID Prestamo']} - {r['Cliente']} (saldo {fmt_money(r['Saldo pendiente'])})": r["ID Prestamo"]
-            for _, r in activos.iterrows()
-        }
-        if not opciones:
+        st.subheader("Prestamos activos")
+        if visibles.empty:
             st.info("No hay prestamos activos (todos estan pagados).")
         else:
-            with st.form("nuevo_pago", clear_on_submit=True):
-                etiqueta = st.selectbox("Prestamo", list(opciones.keys()))
-                fecha_pago = st.date_input("Fecha de pago", value=date.today())
-                monto_pagado = st.number_input("Monto pagado (₡)", min_value=0, step=1000)
-                submitted = st.form_submit_button("Guardar pago")
-                if submitted:
-                    if monto_pagado <= 0:
-                        st.warning("El monto pagado debe ser mayor a cero.")
-                    else:
-                        ws = sh.worksheet(config.SHEET_PAGOS)
-                        row = next_row(ws, "B")
-                        if row > PAGOS_PREFILL_ROWS:
-                            st.error(
-                                f"Se alcanzo el limite de {PAGOS_PREFILL_ROWS} pagos precargados. "
-                                "Pideme que extienda las formulas de la hoja Pagos."
-                            )
-                        else:
-                            id_prestamo = opciones[etiqueta]
-                            prestamo = activos[activos["ID Prestamo"] == id_prestamo].iloc[0]
-                            resultado = calcular_pago(
-                                saldo_anterior=float(prestamo["Saldo pendiente"]),
-                                tasa_mensual=float(prestamo["Tasa interes (%/periodo)"]),
-                                frecuencia=prestamo["Frecuencia de pago"],
-                                monto_pagado=monto_pagado,
-                            )
+            hcols = st.columns([2.2, 1.5, 1, 1.5, 1.5, 0.6, 0.6])
+            for h, texto in zip(hcols, ["Cliente", "Saldo pendiente", "Interes", "Monto", "Proximo pago", "", ""]):
+                h.markdown(f"**{texto}**")
 
-                            # Columna C (Cliente) es formula -- no se escribe.
-                            ws.update([[id_prestamo]], f"B{row}", value_input_option="USER_ENTERED")
-                            ws.update(
-                                [[fecha_pago.strftime("%Y-%m-%d"), monto_pagado]],
-                                f"D{row}:E{row}", value_input_option="USER_ENTERED",
-                            )
-                            st.session_state["ultimo_pago"] = {
-                                "cliente": prestamo["Cliente"],
-                                "fecha": fecha_pago.strftime("%d/%m/%Y"),
-                                **resultado,
-                            }
-                            load_df.clear()
-                            st.rerun()
+            for _, fila in visibles.iterrows():
+                id_prestamo = fila["ID Prestamo"]
+                key = f"fila_{id_prestamo}"
+                with st.container(key=key, border=True):
+                    c1, c2, c3, c4, c5, c6, c7 = st.columns([2.2, 1.5, 1, 1.5, 1.5, 0.6, 0.6])
+                    c1.markdown(f"**{fila['Cliente']}**")
+                    c2.markdown(fmt_money(fila["Saldo pendiente"]))
+                    c3.markdown(fmt_pct(fila["Tasa interes (%/periodo)"]))
+                    c4.markdown(fmt_money(fila["Monto"]))
+                    c5.markdown(fila["Proximo pago"])
+                    ver_click = c6.button("👁️", key=f"ver_{id_prestamo}", help="Ver detalle")
+                    pagar_click = c7.button("💰", key=f"pagar_{id_prestamo}", help="Registrar pago")
 
-    if "ultimo_pago" in st.session_state:
-        p = st.session_state["ultimo_pago"]
-        st.success("Pago guardado.")
-        mensaje = (
-            f"Hola {p['cliente']}\n\n"
-            f"Resumen de tu pago del {p['fecha']}:\n"
-            f"Saldo anterior: {fmt_money(p['saldo_anterior'])}\n"
-            f"Interes: {fmt_money(p['interes'])}\n"
-            f"Monto pagado: {fmt_money(p['monto_pagado'])}\n"
-            f"Abono a capital: {fmt_money(p['abono'])}\n"
-            f"Saldo actual: {fmt_money(p['saldo_nuevo'])}"
-        )
-        st.text_area("Mensaje para compartir", mensaje, height=170)
-        link_wsp = "https://wa.me/?text=" + urllib.parse.quote(mensaje)
-        cwsp, ccerrar = st.columns([1, 1])
-        cwsp.link_button("📲 Enviar por WhatsApp", link_wsp)
-        if ccerrar.button("Cerrar"):
-            del st.session_state["ultimo_pago"]
-            st.rerun()
+                    panel = st.session_state.get("panel_abierto")
+                    if panel and panel[0] == id_prestamo:
+                        st.markdown("---")
+                        if panel[1] == "detalle":
+                            _panel_detalle(sh, fila, pagos_df)
+                        elif panel[1] == "pago":
+                            _panel_pago(sh, fila)
+
+                color = CATEGORIA_COLOR.get(fila["Categoria"], "transparent")
+                st.markdown(
+                    f"<style>.st-key-{key} {{ background: {color}; border-radius: 12px; }}</style>",
+                    unsafe_allow_html=True,
+                )
+
+                if ver_click or pagar_click:
+                    tipo = "detalle" if ver_click else "pago"
+                    actual = st.session_state.get("panel_abierto")
+                    st.session_state["panel_abierto"] = None if actual == (id_prestamo, tipo) else (id_prestamo, tipo)
+                    st.rerun()
+
+            st.caption("🟢 Nuevo · 🟣 Ya viene pagando · 🟠 Atrasado (hasta 5 dias) · 🔴 Atrasado (mas de 5 dias)")
 
     st.divider()
-    st.subheader("Historial de pagos")
-    if pagos_df.empty:
-        st.info("Aun no hay pagos registrados.")
-    else:
-        render_tabla(pagos_df, PAGOS_COLS_ORDEN)
+    with st.expander("➕ Agregar nuevo prestamo"):
+        with st.form("nuevo_prestamo", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            cliente = c1.text_input("Cliente")
+            fecha_inicio = c2.date_input("Fecha de inicio", value=date.today())
+            monto = c1.number_input("Monto prestado (₡)", min_value=0, step=1000)
+            tasa = c2.number_input(
+                "Tasa de interes mensual (%)", min_value=0.0, step=0.5, format="%.2f",
+                help="Siempre mensual. Si la frecuencia de pago es Quincenal, Semanal o "
+                     "Diario, el interes de cada pago se prorratea automaticamente.",
+            )
+            frecuencia = c1.selectbox("Frecuencia de pago", FRECUENCIAS)
+            submitted = st.form_submit_button("Guardar prestamo")
+            if submitted:
+                if not cliente or monto <= 0:
+                    st.warning("Completa al menos Cliente y Monto prestado.")
+                else:
+                    ws = sh.worksheet(config.SHEET_PRESTAMOS)
+                    row = next_row(ws, "B")
+                    ws.update(
+                        [[cliente, fecha_inicio.strftime("%Y-%m-%d"), monto, tasa / 100, frecuencia]],
+                        f"B{row}:F{row}", value_input_option="USER_ENTERED",
+                    )
+                    st.success(f"Prestamo de {cliente} guardado.")
+                    load_df.clear()
+                    st.rerun()
+
+    if not prestamos_df.empty:
+        with st.expander(f"📁 Prestamos pagados ({len(pagados)})"):
+            if pagados.empty:
+                st.caption("Todavia no hay prestamos completamente pagados.")
+            else:
+                render_tabla(pagados[["Cliente", "Monto prestado", "Total pagado", "Interes cobrado"]])
+
+    if not pagos_df.empty:
+        with st.expander("Ver historial completo de pagos"):
+            render_tabla(pagos_df, PAGOS_COLS_ORDEN)

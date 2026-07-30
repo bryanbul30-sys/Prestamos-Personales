@@ -1,6 +1,14 @@
 import pytest
 
-from calculos import FACTOR_FRECUENCIA, PAGOS_POR_MES, calcular_pago, fmt_money, fmt_pct, siguiente_fila_libre
+from calculos import (
+    FACTOR_FRECUENCIA,
+    PAGOS_POR_MES,
+    calcular_pago,
+    clasificar_prestamo,
+    fmt_money,
+    fmt_pct,
+    siguiente_fila_libre,
+)
 
 
 def test_calcular_pago_quincenal_abona_capital():
@@ -75,6 +83,24 @@ def test_factor_frecuencia_se_deriva_de_pagos_por_mes():
     assert PAGOS_POR_MES == {"Diario": 30, "Semanal": 4, "Quincenal": 2, "Mensual": 1}
     assert FACTOR_FRECUENCIA["Semanal"] == pytest.approx(0.25)
     assert FACTOR_FRECUENCIA["Quincenal"] == pytest.approx(0.5)
+
+
+def test_clasificar_prestamo_pagado():
+    assert clasificar_prestamo("Pagado", dias_atraso=0, tiene_pagos=True) == "pagado"
+    # Pagado manda sin importar dias_atraso/tiene_pagos.
+    assert clasificar_prestamo("Pagado", dias_atraso=99, tiene_pagos=False) == "pagado"
+
+
+def test_clasificar_prestamo_atrasado_leve_vs_grave():
+    assert clasificar_prestamo("Atrasado", dias_atraso=1, tiene_pagos=True) == "atrasado_leve"
+    assert clasificar_prestamo("Atrasado", dias_atraso=5, tiene_pagos=True) == "atrasado_leve"
+    assert clasificar_prestamo("Atrasado", dias_atraso=6, tiene_pagos=True) == "atrasado_grave"
+    assert clasificar_prestamo("Atrasado", dias_atraso=30, tiene_pagos=False) == "atrasado_grave"
+
+
+def test_clasificar_prestamo_al_dia_nuevo_vs_con_pagos():
+    assert clasificar_prestamo("Al dia", dias_atraso=0, tiene_pagos=False) == "nuevo"
+    assert clasificar_prestamo("Al dia", dias_atraso=0, tiene_pagos=True) == "con_pagos"
 
 
 def test_siguiente_fila_libre_sin_huecos():

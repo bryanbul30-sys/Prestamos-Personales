@@ -77,6 +77,33 @@ def fmt_pct(v):
         return v
 
 
+# Umbral para distinguir un atraso leve de uno grave, en dias por encima
+# del maximo permitido (no en dias desde el ultimo pago).
+DIAS_ATRASO_GRAVE = 5
+
+CATEGORIAS_PRESTAMO = ("pagado", "atrasado_grave", "atrasado_leve", "con_pagos", "nuevo")
+
+
+def clasificar_prestamo(estado, dias_atraso, tiene_pagos):
+    """Categoria visual de un prestamo (para colorear su fila):
+
+    - "pagado": saldo en cero, prestamo cerrado.
+    - "atrasado_grave": atrasado con mas de DIAS_ATRASO_GRAVE dias por
+      encima del maximo permitido.
+    - "atrasado_leve": atrasado pero dentro de esos dias de tolerancia.
+    - "con_pagos": al dia y ya registro al menos un pago.
+    - "nuevo": al dia pero todavia no ha pagado nada (prestamo reciente).
+
+    dias_atraso es "Dias desde referencia" - "Dias max permitidos" (solo
+    tiene sentido cuando estado es "Atrasado"; se ignora en otro caso).
+    """
+    if estado == "Pagado":
+        return "pagado"
+    if estado == "Atrasado":
+        return "atrasado_grave" if dias_atraso > DIAS_ATRASO_GRAVE else "atrasado_leve"
+    return "con_pagos" if tiene_pagos else "nuevo"
+
+
 def siguiente_fila_libre(valores):
     """Primera fila libre despues de la ultima realmente usada, a partir de
     una lista de valores de una columna (incluyendo el encabezado en el
