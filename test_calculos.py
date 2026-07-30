@@ -5,6 +5,7 @@ import pytest
 from calculos import (
     FACTOR_FRECUENCIA,
     PAGOS_POR_MES,
+    calcular_abono_capital,
     calcular_pago,
     clasificar_prestamo,
     fmt_money,
@@ -51,6 +52,27 @@ def test_calcular_pago_frecuencia_desconocida_no_prorratea():
     # Frecuencia invalida/desconocida cae al factor 1 (no prorratea), no revienta.
     r = calcular_pago(100_000, 0.10, "Bisemanal", 20_000)
     assert r["interes"] == 10_000
+
+
+def test_calcular_pago_no_supera_el_saldo_si_pagan_de_mas():
+    # Saldo 10.000, interes 1.000, pagan 50.000: el abono no puede
+    # superar el saldo (no queda en negativo).
+    r = calcular_pago(saldo_anterior=10_000, tasa_mensual=0.10, frecuencia="Mensual", monto_pagado=50_000)
+    assert r["abono"] == 10_000
+    assert r["saldo_nuevo"] == 0
+
+
+def test_calcular_abono_capital_no_cobra_interes():
+    r = calcular_abono_capital(saldo_anterior=50_000, monto_pagado=20_000)
+    assert r["interes"] == 0
+    assert r["abono"] == 20_000
+    assert r["saldo_nuevo"] == 30_000
+
+
+def test_calcular_abono_capital_no_supera_el_saldo():
+    r = calcular_abono_capital(saldo_anterior=15_000, monto_pagado=20_000)
+    assert r["abono"] == 15_000
+    assert r["saldo_nuevo"] == 0
 
 
 def test_fmt_money_usa_punto_de_miles():

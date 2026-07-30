@@ -13,6 +13,7 @@ import streamlit.components.v1 as components
 import config
 from calculos import (
     FACTOR_FRECUENCIA,
+    calcular_abono_capital,
     calcular_pago,
     clasificar_prestamo,
     fmt_money,
@@ -20,6 +21,7 @@ from calculos import (
     proximo_pago,
     siguiente_fila_libre,
 )
+from setup_sheet import formula_fila_pagos
 from sheets_client import get_spreadsheet
 
 st.set_page_config(page_title="Control de Prestamos", page_icon="\U0001F4B0", layout="wide")
@@ -186,6 +188,12 @@ def eliminar_prestamo(sh, id_prestamo):
             rangos.append(f"B{c.row}")
             rangos.append(f"D{c.row}:E{c.row}")
         ws_pg.batch_clear(rangos)
+        # F:I normalmente son formulas, pero un abono extra a capital
+        # (sin interes) las sobreescribe con valores fijos en esa fila
+        # puntual -- hay que restaurar la formula, no solo vaciar, para
+        # que la fila quede reutilizable para el siguiente pago.
+        for c in celdas_pago:
+            ws_pg.update([formula_fila_pagos(c.row)], f"F{c.row}:I{c.row}", value_input_option="USER_ENTERED")
 
 
 def _mostrar_mensaje_whatsapp(pago):
@@ -218,6 +226,13 @@ def _panel_pago(sh, fila):
     with st.form(f"pago_{id_prestamo}", clear_on_submit=True):
         fecha_pago = st.date_input("Fecha de pago", value=date.today(), key=f"fecha_{id_prestamo}")
         monto_pagado = st.number_input("Monto pagado (₡)", min_value=0, step=1000, key=f"monto_{id_prestamo}")
+        solo_capital = st.checkbox(
+            "Es un abono extra a capital (el interes de este periodo ya esta pagado)",
+            key=f"solocapital_{id_prestamo}",
+            help="Marca esto si el cliente ya pago el interes de este periodo en un "
+                 "pago anterior y este pago es solo para bajar el saldo, sin cobrar "
+                 "interes de nuevo.",
+        )
         submitted = st.form_submit_button("Guardar pago")
         if submitted:
             if monto_pagado <= 0:
@@ -231,18 +246,34 @@ def _panel_pago(sh, fila):
                         "Pideme que extienda las formulas de la hoja Pagos."
                     )
                 else:
-                    resultado = calcular_pago(
-                        saldo_anterior=float(fila["Saldo pendiente"]),
-                        tasa_mensual=float(fila["Tasa interes (%/periodo)"]),
-                        frecuencia=fila["Frecuencia de pago"],
-                        monto_pagado=monto_pagado,
-                    )
+                    saldo_anterior = float(fila["Saldo pendiente"])
+                    if solo_capital:
+                        resultado = calcular_abono_capital(saldo_anterior, monto_pagado)
+                    else:
+                        resultado = calcular_pago(
+                            saldo_anterior=saldo_anterior,
+                            tasa_mensual=float(fila["Tasa interes (%/periodo)"]),
+                            frecuencia=fila["Frecuencia de pago"],
+                            monto_pagado=monto_pagado,
+                        )
                     # Columna C (Cliente) es formula -- no se escribe.
                     ws.update([[id_prestamo]], f"B{row}", value_input_option="USER_ENTERED")
                     ws.update(
                         [[fecha_pago.strftime("%Y-%m-%d"), monto_pagado]],
                         f"D{row}:E{row}", value_input_option="USER_ENTERED",
                     )
+                    if solo_capital:
+                        # F:I normalmente son formulas que cobran interes
+                        # siempre -- para un abono extra se sobreescriben
+                        # con los valores fijos calculados arriba (interes
+                        # en 0), asi esta fila puntual no cobra interes.
+                        ws.update(
+                            [[
+                                resultado["saldo_anterior"], resultado["interes"],
+                                resultado["abono"], resultado["saldo_nuevo"],
+                            ]],
+                            f"F{row}:I{row}", value_input_option="USER_ENTERED",
+                        )
                     st.session_state["ultimo_pago"] = {
                         "id_prestamo": id_prestamo,
                         "cliente": fila["Cliente"],

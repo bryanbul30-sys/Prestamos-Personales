@@ -71,18 +71,34 @@ def factor_frecuencia(frecuencia):
 
 
 def calcular_pago(saldo_anterior, tasa_mensual, frecuencia, monto_pagado):
-    """Interes, abono a capital y saldo nuevo para un pago.
+    """Interes, abono a capital y saldo nuevo para un pago normal.
 
     Si el pago no alcanza a cubrir el interes del periodo, no se abona
     capital ese periodo (el interes no cubierto no se acumula ni genera
-    interes sobre interes).
+    interes sobre interes). El abono nunca supera el saldo pendiente
+    (si pagan de mas, el sobrante no se resta del saldo).
     """
     interes = saldo_anterior * tasa_mensual * factor_frecuencia(frecuencia)
-    abono = max(0, monto_pagado - interes)
+    abono = min(saldo_anterior, max(0, monto_pagado - interes))
     saldo_nuevo = saldo_anterior - abono
     return {
         "saldo_anterior": saldo_anterior,
         "interes": interes,
+        "monto_pagado": monto_pagado,
+        "abono": abono,
+        "saldo_nuevo": saldo_nuevo,
+    }
+
+
+def calcular_abono_capital(saldo_anterior, monto_pagado):
+    """Pago que va 100% a capital, sin cobrar interes -- para cuando el
+    cliente ya pago el interes de este periodo en un pago anterior y
+    ahora hace un abono extra."""
+    abono = min(saldo_anterior, monto_pagado)
+    saldo_nuevo = saldo_anterior - abono
+    return {
+        "saldo_anterior": saldo_anterior,
+        "interes": 0,
         "monto_pagado": monto_pagado,
         "abono": abono,
         "saldo_nuevo": saldo_nuevo,

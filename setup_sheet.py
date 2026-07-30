@@ -66,6 +66,22 @@ def _ifs_factor_frecuencia(expr_frecuencia):
     return f"IFS({','.join(partes)})"
 
 
+def formula_fila_pagos(row):
+    """Formulas de F:I (Saldo anterior, Interes, Abono, Saldo nuevo) para
+    una fila de Pagos. Se usa tanto para precargar la hoja como para
+    restaurarlas en app.py cuando se borra un pago que tenia valores
+    fijos en vez de formula (un abono extra a capital sin interes)."""
+    f = (f'=IF(B{row}="","",IFERROR(VLOOKUP(B{row},Prestamos!$A:$D,4,FALSE)'
+         f'-SUMIFS($H$1:H{row - 1},$B$1:B{row - 1},B{row}),"ID invalido"))')
+    frecuencia = f'IFERROR(VLOOKUP(B{row},Prestamos!$A:$F,6,FALSE),"")'
+    factor = _ifs_factor_frecuencia(frecuencia)
+    g = (f'=IF(B{row}="","",IF(F{row}="ID invalido","",'
+         f'F{row}*IFERROR(VLOOKUP(B{row},Prestamos!$A:$E,5,FALSE),0)*{factor}))')
+    h = f'=IF(B{row}="","",IF(F{row}="ID invalido","",MAX(0,E{row}-G{row})))'
+    i = f'=IF(B{row}="","",IF(F{row}="ID invalido","",F{row}-H{row}))'
+    return [f, g, h, i]
+
+
 def get_or_create_ws(sh, title, rows, cols):
     try:
         ws = sh.worksheet(title)
@@ -139,17 +155,7 @@ def setup_pagos(sh):
     # de pago del prestamo. El interes de cada pago se prorratea segun esa
     # frecuencia (mismos dias de referencia que Prestamos!L: Diario=1,
     # Semanal=7, Quincenal=15, Mensual=30, sobre un mes de 30 dias).
-    rows_fgh_i = []
-    for row in range(2, PAGOS_PREFILL_ROWS + 1):
-        f = (f'=IF(B{row}="","",IFERROR(VLOOKUP(B{row},Prestamos!$A:$D,4,FALSE)'
-             f'-SUMIFS($H$1:H{row - 1},$B$1:B{row - 1},B{row}),"ID invalido"))')
-        frecuencia = f'IFERROR(VLOOKUP(B{row},Prestamos!$A:$F,6,FALSE),"")'
-        factor = _ifs_factor_frecuencia(frecuencia)
-        g = (f'=IF(B{row}="","",IF(F{row}="ID invalido","",'
-             f'F{row}*IFERROR(VLOOKUP(B{row},Prestamos!$A:$E,5,FALSE),0)*{factor}))')
-        h = f'=IF(B{row}="","",IF(F{row}="ID invalido","",MAX(0,E{row}-G{row})))'
-        i = f'=IF(B{row}="","",IF(F{row}="ID invalido","",F{row}-H{row}))'
-        rows_fgh_i.append([f, g, h, i])
+    rows_fgh_i = [formula_fila_pagos(row) for row in range(2, PAGOS_PREFILL_ROWS + 1)]
     ws.update(rows_fgh_i, f"F2:I{PAGOS_PREFILL_ROWS}", value_input_option="USER_ENTERED")
 
     ws.format("B2:B1000", {"textFormat": {"foregroundColor": INPUT_FG, "fontFamily": FONT}})
