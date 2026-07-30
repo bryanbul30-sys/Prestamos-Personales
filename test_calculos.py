@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 
 from calculos import (
@@ -7,6 +9,7 @@ from calculos import (
     clasificar_prestamo,
     fmt_money,
     fmt_pct,
+    proximo_pago,
     siguiente_fila_libre,
 )
 
@@ -101,6 +104,36 @@ def test_clasificar_prestamo_atrasado_leve_vs_grave():
 def test_clasificar_prestamo_al_dia_nuevo_vs_con_pagos():
     assert clasificar_prestamo("Al dia", dias_atraso=0, tiene_pagos=False) == "nuevo"
     assert clasificar_prestamo("Al dia", dias_atraso=0, tiene_pagos=True) == "con_pagos"
+
+
+def test_proximo_pago_mensual_es_el_30():
+    assert proximo_pago(date(2026, 7, 10), "Mensual") == date(2026, 7, 30)
+    # Justo en el checkpoint: el proximo es el del mes siguiente.
+    assert proximo_pago(date(2026, 7, 30), "Mensual") == date(2026, 8, 30)
+
+
+def test_proximo_pago_quincenal_15_y_30():
+    assert proximo_pago(date(2026, 7, 10), "Quincenal") == date(2026, 7, 15)
+    assert proximo_pago(date(2026, 7, 16), "Quincenal") == date(2026, 7, 30)
+    assert proximo_pago(date(2026, 7, 30), "Quincenal") == date(2026, 8, 15)
+
+
+def test_proximo_pago_semanal_7_15_22_30():
+    assert proximo_pago(date(2026, 7, 1), "Semanal") == date(2026, 7, 7)
+    assert proximo_pago(date(2026, 7, 7), "Semanal") == date(2026, 7, 15)
+    assert proximo_pago(date(2026, 7, 20), "Semanal") == date(2026, 7, 22)
+    assert proximo_pago(date(2026, 7, 31), "Semanal") == date(2026, 8, 7)
+
+
+def test_proximo_pago_diario_es_el_dia_siguiente():
+    assert proximo_pago(date(2026, 7, 29), "Diario") == date(2026, 7, 30)
+
+
+def test_proximo_pago_respeta_meses_cortos():
+    # Febrero 2026 (no bisiesto) tiene 28 dias -- el checkpoint "30" cae
+    # en el ultimo dia real del mes.
+    assert proximo_pago(date(2026, 2, 1), "Mensual") == date(2026, 2, 28)
+    assert proximo_pago(date(2026, 1, 31), "Mensual") == date(2026, 2, 28)
 
 
 def test_siguiente_fila_libre_sin_huecos():

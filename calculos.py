@@ -13,6 +13,9 @@ cambia tambien la formula equivalente en setup_sheet.py -- no hay forma
 de compartir codigo entre Python y una formula de hoja de calculo.
 """
 
+import calendar
+from datetime import date, timedelta
+
 # Cuantos pagos entran en un mes, segun la frecuencia -- define el
 # prorrateo del interes (factor = 1 / pagos_por_mes). Fuente unica:
 # setup_sheet.py genera a partir de este mismo diccionario la formula de
@@ -26,6 +29,41 @@ FACTOR_FRECUENCIA = {frec: 1 / pagos for frec, pagos in PAGOS_POR_MES.items()}
 # "Dias max permitidos" (Prestamos!L en setup_sheet.py), que decide
 # cuanto puede pasar sin pagar antes de marcar un prestamo Atrasado.
 DIAS_POR_FRECUENCIA = {"Diario": 1, "Semanal": 7, "Quincenal": 15, "Mensual": 30}
+
+# Fechas fijas de pago dentro del mes (no "cada N dias desde el ultimo
+# pago", sino dias de calendario fijos). Diario no tiene lista fija: el
+# proximo pago es siempre el dia siguiente.
+DIAS_PAGO_MES = {
+    "Semanal": [7, 15, 22, 30],
+    "Quincenal": [15, 30],
+    "Mensual": [30],
+}
+
+
+def _fecha_checkpoint(anio, mes, dia):
+    # Si el mes no llega a ese dia (ej. dia 30 en febrero), usa el ultimo
+    # dia real del mes.
+    ultimo_dia_mes = calendar.monthrange(anio, mes)[1]
+    return date(anio, mes, min(dia, ultimo_dia_mes))
+
+
+def proximo_pago(fecha_referencia, frecuencia):
+    """Proxima fecha de pago fija segun el calendario (no relativa a la
+    fecha de referencia): Mensual = dia 30, Quincenal = 15 y 30, Semanal
+    = 7/15/22/30 de cada mes. Diario no tiene fechas fijas, es siempre el
+    dia siguiente."""
+    if frecuencia == "Diario":
+        return fecha_referencia + timedelta(days=1)
+
+    dias_checkpoint = DIAS_PAGO_MES.get(frecuencia, DIAS_PAGO_MES["Mensual"])
+    anio, mes = fecha_referencia.year, fecha_referencia.month
+    siguiente_mes = mes + 1 if mes < 12 else 1
+    siguiente_anio = anio if mes < 12 else anio + 1
+
+    candidatos = [_fecha_checkpoint(anio, mes, d) for d in dias_checkpoint]
+    candidatos += [_fecha_checkpoint(siguiente_anio, siguiente_mes, d) for d in dias_checkpoint]
+
+    return min(c for c in candidatos if c > fecha_referencia)
 
 
 def factor_frecuencia(frecuencia):

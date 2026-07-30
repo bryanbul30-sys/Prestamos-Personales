@@ -12,12 +12,12 @@ import streamlit.components.v1 as components
 
 import config
 from calculos import (
-    DIAS_POR_FRECUENCIA,
     FACTOR_FRECUENCIA,
     calcular_pago,
     clasificar_prestamo,
     fmt_money,
     fmt_pct,
+    proximo_pago,
     siguiente_fila_libre,
 )
 from sheets_client import get_spreadsheet
@@ -450,12 +450,14 @@ with tab_prestamos:
             * pd.to_numeric(base_df["Tasa interes (%/periodo)"], errors="coerce")
             * factor
         )
-        # Proximo pago = fecha del ultimo pago (o inicio, si aun no pago
-        # nada) + dias del ciclo de esa frecuencia.
+        # Proximo pago = siguiente fecha fija de calendario (15/30, etc.)
+        # despues del ultimo pago (o del inicio, si aun no pago nada).
         fecha_ref = base_df["Fecha ultimo pago"].replace("", pd.NA).fillna(base_df["Fecha inicio"])
         fecha_ref = pd.to_datetime(fecha_ref, format="%d/%m/%Y", errors="coerce")
-        dias_ciclo = base_df["Frecuencia de pago"].map(DIAS_POR_FRECUENCIA).fillna(30)
-        base_df["Proximo pago"] = (fecha_ref + pd.to_timedelta(dias_ciclo, unit="D")).dt.strftime("%d/%m/%Y")
+        base_df["Proximo pago"] = [
+            proximo_pago(f.date(), frec).strftime("%d/%m/%Y") if pd.notna(f) else ""
+            for f, frec in zip(fecha_ref, base_df["Frecuencia de pago"])
+        ]
 
         dias_atraso = (
             pd.to_numeric(base_df["Dias desde referencia"], errors="coerce")
