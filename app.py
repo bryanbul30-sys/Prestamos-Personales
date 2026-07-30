@@ -39,6 +39,13 @@ COLUMNAS_DINERO = {
 }
 COLUMNAS_PORCENTAJE = {"Tasa interes (%/periodo)", "Interés"}
 
+# Colores de la etiqueta de Estado: (fondo, texto).
+ESTADO_COLORES = {
+    "Al dia": ("rgba(34, 197, 94, 0.15)", "#16a34a"),
+    "Atrasado": ("rgba(239, 68, 68, 0.15)", "#dc2626"),
+    "Pagado": ("rgba(59, 130, 246, 0.15)", "#2563eb"),
+}
+
 TABLA_CSS = """
 <style>
 .tabla-scroll { overflow-x: auto; margin-bottom: 1rem; }
@@ -54,8 +61,18 @@ TABLA_CSS = """
     text-align: right; font-size: 1.15rem; font-weight: 600;
     font-variant-numeric: tabular-nums;
 }
+.badge-estado {
+    display: inline-block; padding: 0.15rem 0.65rem; border-radius: 999px;
+    font-weight: 600; font-size: 0.85rem; white-space: nowrap;
+}
 </style>
 """
+
+
+def _badge_estado(valor):
+    texto = _celda(valor)
+    fondo, color = ESTADO_COLORES.get(valor, ("rgba(128, 128, 128, 0.15)", "inherit"))
+    return f'<span class="badge-estado" style="background:{fondo};color:{color};">{texto}</span>'
 
 
 def reordenar(df, orden):
@@ -87,6 +104,8 @@ def render_tabla(df, orden=None):
                 celdas.append(f'<td class="num">{fmt_money(valor)}</td>')
             elif c in COLUMNAS_PORCENTAJE:
                 celdas.append(f'<td class="num">{fmt_pct(valor)}</td>')
+            elif c == "Estado":
+                celdas.append(f"<td>{_badge_estado(valor)}</td>")
             else:
                 celdas.append(f"<td>{_celda(valor)}</td>")
         filas.append(f"<tr>{''.join(celdas)}</tr>")
