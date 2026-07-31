@@ -40,7 +40,7 @@ PRESTAMOS_COLS_ORDEN = [
     "Interes cobrado", "Dias desde referencia",
 ]
 PAGOS_COLS_ORDEN = [
-    "Cliente", "Fecha de pago", "Monto pagado", "Saldo nuevo",
+    "Tipo", "Cliente", "Fecha de pago", "Monto pagado", "Saldo nuevo",
     "ID Prestamo", "ID Pago", "Saldo anterior", "Interes del periodo",
     "Abono a capital",
 ]
@@ -103,6 +103,26 @@ def reordenar(df, orden):
     cols = [c for c in orden if c in df.columns]
     cols += [c for c in df.columns if c not in cols]
     return df[cols]
+
+
+def _tipo_pago(fila):
+    # Un ajuste (ver _registrar_ajuste) siempre tiene Monto pagado en 0
+    # -- un pago real nunca se guarda con 0. Se distingue de un vistazo
+    # en el historial en vez de leerse como un pago normal de ₡0.
+    try:
+        monto_pagado = float(fila["Monto pagado"])
+        abono = float(fila["Abono a capital"])
+    except (TypeError, ValueError):
+        return "Pago"
+    if monto_pagado == 0 and abono != 0:
+        return "➕ Prestamo adicional" if abono < 0 else "🔧 Ajuste"
+    return "Pago"
+
+
+def con_tipo_pago(df):
+    d = df.copy()
+    d["Tipo"] = d.apply(_tipo_pago, axis=1)
+    return d
 
 
 def _celda(v):
@@ -288,6 +308,54 @@ def _panel_pago(sh, fila):
                     st.rerun()
 
 
+def _registrar_ajuste(sh, id_prestamo, saldo_actual, saldo_nuevo, fecha=None):
+    """Agrega una fila de Pagos con interes 0 que mueve el saldo de
+    saldo_actual a saldo_nuevo, sin tocar el historial de pagos
+    anteriores. "Monto pagado" queda en 0 (no es un pago real recibido)
+    -- el historial (render_tabla en la tabla de Pagos) reconoce estas
+    filas por eso y las etiqueta como ajuste/prestamo adicional en vez
+    de un pago normal. Abono a capital negativo = se le presto mas
+    (sube el saldo); positivo = se le corrige el saldo hacia abajo."""
+    ws_pg = sh.worksheet(config.SHEET_PAGOS)
+    row_pg = next_row(ws_pg, "B")
+    ajuste_a_capital = saldo_actual - saldo_nuevo
+    fecha = fecha or date.today()
+    ws_pg.update([[id_prestamo]], f"B{row_pg}", value_input_option="USER_ENTERED")
+    ws_pg.update(
+        [[fecha.strftime("%Y-%m-%d"), 0]],
+        f"D{row_pg}:E{row_pg}", value_input_option="USER_ENTERED",
+    )
+    ws_pg.update(
+        [[saldo_actual, 0, ajuste_a_capital, saldo_nuevo]],
+        f"F{row_pg}:I{row_pg}", value_input_option="USER_ENTERED",
+    )
+
+
+def _panel_prestar_mas(sh, fila):
+    """Presta un monto adicional a un cliente que ya tiene un prestamo
+    activo (p.ej. pide mas dinero sobre lo que ya debe). Se suma al
+    saldo pendiente y queda en el historial de pagos como un ajuste
+    identificable, sin tocar los pagos anteriores."""
+    id_prestamo = fila["ID Prestamo"]
+    saldo_actual = float(fila["Saldo pendiente"])
+    with st.form(f"prestarmas_{id_prestamo}", clear_on_submit=True):
+        fecha = st.date_input("Fecha", value=date.today(), key=f"fechamas_{id_prestamo}")
+        monto_extra = st.number_input(
+            "Monto adicional que le prestas (₡)", min_value=0, step=1000, key=f"extra_{id_prestamo}",
+        )
+        submitted = st.form_submit_button("Prestar este monto")
+        if submitted:
+            if monto_extra <= 0:
+                st.warning("El monto debe ser mayor a cero.")
+            else:
+                saldo_nuevo = saldo_actual + monto_extra
+                _registrar_ajuste(sh, id_prestamo, saldo_actual, saldo_nuevo, fecha)
+                st.success(f"Se sumaron {fmt_money(monto_extra)} al saldo de {fila['Cliente']}.")
+                st.session_state["panel_abierto"] = None
+                load_df.clear()
+                st.rerun()
+
+
 def _panel_editar(sh, fila):
     """Edita como esta el prestamo AHORA (cliente, saldo pendiente, tasa,
     frecuencia) -- no los datos originales de cuando se dio el prestamo.
@@ -347,16 +415,7 @@ def _panel_editar(sh, fila):
                     if round(saldo_nuevo) != round(saldo_actual):
                         ws_pg = sh.worksheet(config.SHEET_PAGOS)
                         row_pg = next_row(ws_pg, "B")
-                        ajuste_a_capital = saldo_actual - saldo_nuevo
-                        ws_pg.update([[id_prestamo]], f"B{row_pg}", value_input_option="USER_ENTERED")
-                        ws_pg.update(
-                            [[date.today().strftime("%Y-%m-%d"), 0]],
-                            f"D{row_pg}:E{row_pg}", value_input_option="USER_ENTERED",
-                        )
-                        ws_pg.update(
-                            [[saldo_actual, 0, ajuste_a_capital, saldo_nuevo]],
-                            f"F{row_pg}:I{row_pg}", value_input_option="USER_ENTERED",
-                        )
+                        _registrar_ajuste(sh, id_prestamo, saldo_actual, saldo_nuevo)
                 st.success("Prestamo actualizado.")
                 st.session_state["panel_abierto"] = None
                 load_df.clear()
@@ -379,7 +438,7 @@ def _panel_detalle(sh, fila, pagos_df):
     if historial.empty:
         st.caption("Todavia no tiene pagos registrados.")
     else:
-        render_tabla(historial, PAGOS_COLS_ORDEN)
+        render_tabla(con_tipo_pago(historial), PAGOS_COLS_ORDEN)
 
     if st.session_state.get("confirmar_borrado") == id_prestamo:
         st.warning(
@@ -586,15 +645,17 @@ with tab_prestamos:
         if visibles.empty:
             st.info("No hay prestamos activos (todos estan pagados).")
         else:
-            hcols = st.columns([2.1, 1.4, 0.9, 1.4, 1.4, 0.5, 0.5, 0.5])
-            for h, texto in zip(hcols, ["Cliente", "Saldo pendiente", "Interes", "Monto", "Proximo pago", "", "", ""]):
+            hcols = st.columns([1.9, 1.3, 0.8, 1.3, 1.3, 0.45, 0.45, 0.45, 0.45])
+            for h, texto in zip(hcols, ["Cliente", "Saldo pendiente", "Interes", "Monto", "Proximo pago", "", "", "", ""]):
                 h.markdown(f"**{texto}**")
 
             for _, fila in visibles.iterrows():
                 id_prestamo = fila["ID Prestamo"]
                 key = f"fila_{id_prestamo}"
                 with st.container(key=key, border=True):
-                    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([2.1, 1.4, 0.9, 1.4, 1.4, 0.5, 0.5, 0.5])
+                    c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns(
+                        [1.9, 1.3, 0.8, 1.3, 1.3, 0.45, 0.45, 0.45, 0.45]
+                    )
                     c1.markdown(f"**{fila['Cliente']}**")
                     c2.markdown(fmt_money(fila["Saldo pendiente"]))
                     c3.markdown(fmt_pct(fila["Tasa interes (%/periodo)"]))
@@ -602,7 +663,8 @@ with tab_prestamos:
                     c5.markdown(fila["Proximo pago"])
                     ver_click = c6.button("👁️", key=f"ver_{id_prestamo}", help="Ver detalle")
                     pagar_click = c7.button("💰", key=f"pagar_{id_prestamo}", help="Registrar pago")
-                    editar_click = c8.button("✏️", key=f"editar_{id_prestamo}", help="Editar prestamo")
+                    mas_click = c8.button("➕", key=f"mas_{id_prestamo}", help="Prestar mas (sumar al saldo)")
+                    editar_click = c9.button("✏️", key=f"editar_{id_prestamo}", help="Editar prestamo")
 
                     panel = st.session_state.get("panel_abierto")
                     if panel and panel[0] == id_prestamo:
@@ -611,6 +673,8 @@ with tab_prestamos:
                             _panel_detalle(sh, fila, pagos_df)
                         elif panel[1] == "pago":
                             _panel_pago(sh, fila)
+                        elif panel[1] == "mas":
+                            _panel_prestar_mas(sh, fila)
                         elif panel[1] == "editar":
                             _panel_editar(sh, fila)
 
@@ -620,8 +684,15 @@ with tab_prestamos:
                     unsafe_allow_html=True,
                 )
 
-                if ver_click or pagar_click or editar_click:
-                    tipo = "detalle" if ver_click else ("pago" if pagar_click else "editar")
+                if ver_click or pagar_click or mas_click or editar_click:
+                    if ver_click:
+                        tipo = "detalle"
+                    elif pagar_click:
+                        tipo = "pago"
+                    elif mas_click:
+                        tipo = "mas"
+                    else:
+                        tipo = "editar"
                     actual = st.session_state.get("panel_abierto")
                     st.session_state["panel_abierto"] = None if actual == (id_prestamo, tipo) else (id_prestamo, tipo)
                     st.rerun()
@@ -665,4 +736,4 @@ with tab_prestamos:
 
     if not pagos_df.empty:
         with st.expander("Ver historial completo de pagos"):
-            render_tabla(pagos_df, PAGOS_COLS_ORDEN)
+            render_tabla(con_tipo_pago(pagos_df), PAGOS_COLS_ORDEN)
