@@ -11,8 +11,18 @@ from calculos import (
     fmt_money,
     fmt_pct,
     proximo_pago,
+    redondear_500,
     siguiente_fila_libre,
 )
+
+
+def test_redondear_500():
+    assert redondear_500(0) == 0
+    assert redondear_500(249) == 0
+    assert redondear_500(250) == 500  # empate redondea hacia arriba
+    assert redondear_500(4750) == 5000
+    assert redondear_500(4200) == 4000
+    assert redondear_500(5000) == 5000
 
 
 def test_calcular_pago_quincenal_abona_capital():
@@ -36,15 +46,21 @@ def test_calcular_pago_semanal_y_diario():
     semanal = calcular_pago(100_000, 0.10, "Semanal", 20_000)
     assert semanal["interes"] == round(100_000 * 0.10 / 4)
 
-    # 100.000 * 10% / 30 = 333.33... -> se redondea a colones enteros.
+    # 100.000 * 10% / 30 = 333.33... -> se redondea al multiplo de 500
+    # mas cercano (500 en este caso, ya que 333 esta mas cerca de 500 que de 0).
     diario = calcular_pago(100_000, 0.10, "Diario", 20_000)
-    assert diario["interes"] == 333
+    assert diario["interes"] == 500
 
 
-def test_calcular_pago_redondea_el_interes_a_colones_enteros():
+def test_calcular_pago_redondea_interes_y_abono_a_multiplos_de_500():
     r = calcular_pago(saldo_anterior=100_000, tasa_mensual=0.10, frecuencia="Diario", monto_pagado=20_000)
-    assert isinstance(r["interes"], int)
-    assert r["abono"] == 20_000 - 333
+    assert r["interes"] == 500
+    assert r["abono"] == 19_500  # 20.000 - 500, ya es multiplo de 500
+
+    # Un caso donde el abono en bruto NO cae justo en un multiplo de 500.
+    r2 = calcular_pago(saldo_anterior=100_000, tasa_mensual=0.10, frecuencia="Diario", monto_pagado=20_200)
+    assert r2["interes"] == 500
+    assert r2["abono"] == 19_500  # 20.200-500=19.700 -> redondea a 19.500
 
 
 def test_calcular_pago_no_cubre_interes_no_abona_capital():

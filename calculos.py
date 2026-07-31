@@ -14,6 +14,7 @@ de compartir codigo entre Python y una formula de hoja de calculo.
 """
 
 import calendar
+import math
 from datetime import date, timedelta
 
 # Cuantos pagos entran en un mes, segun la frecuencia -- define el
@@ -70,6 +71,18 @@ def factor_frecuencia(frecuencia):
     return FACTOR_FRECUENCIA.get(frecuencia, 1)
 
 
+def redondear_500(v):
+    """Redondea al multiplo de 500 mas cercano -- denominacion de
+    efectivo tipica para manejar prestamos en colones. Interes y abono
+    se redondean cada uno por separado, asi que pueden no sumar
+    exactamente el monto pagado (diferencia de hasta +-250 en cada uno).
+
+    Un empate exacto (250) redondea siempre hacia arriba -- round() de
+    Python redondea los .5 al par mas cercano (250/500=0.5 -> 0), que
+    para plata no es lo intuitivo."""
+    return math.floor(v / 500 + 0.5) * 500
+
+
 def calcular_pago(saldo_anterior, tasa_mensual, frecuencia, monto_pagado):
     """Interes, abono a capital y saldo nuevo para un pago normal.
 
@@ -78,10 +91,9 @@ def calcular_pago(saldo_anterior, tasa_mensual, frecuencia, monto_pagado):
     interes sobre interes). El abono nunca supera el saldo pendiente
     (si pagan de mas, el sobrante no se resta del saldo).
     """
-    # Redondeado a colones enteros -- no tiene sentido cobrar centavos, y
-    # evita que se acumulen residuos fraccionarios de un pago a otro.
-    interes = round(saldo_anterior * tasa_mensual * factor_frecuencia(frecuencia))
-    abono = min(saldo_anterior, max(0, monto_pagado - interes))
+    interes = redondear_500(saldo_anterior * tasa_mensual * factor_frecuencia(frecuencia))
+    abono = redondear_500(max(0, monto_pagado - interes))
+    abono = min(saldo_anterior, abono)
     saldo_nuevo = saldo_anterior - abono
     return {
         "saldo_anterior": saldo_anterior,
@@ -96,7 +108,7 @@ def calcular_abono_capital(saldo_anterior, monto_pagado):
     """Pago que va 100% a capital, sin cobrar interes -- para cuando el
     cliente ya pago el interes de este periodo en un pago anterior y
     ahora hace un abono extra."""
-    abono = min(saldo_anterior, monto_pagado)
+    abono = min(saldo_anterior, redondear_500(monto_pagado))
     saldo_nuevo = saldo_anterior - abono
     return {
         "saldo_anterior": saldo_anterior,

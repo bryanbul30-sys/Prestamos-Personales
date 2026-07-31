@@ -75,11 +75,12 @@ def formula_fila_pagos(row):
          f'-SUMIFS($H$1:H{row - 1},$B$1:B{row - 1},B{row}),"ID invalido"))')
     frecuencia = f'IFERROR(VLOOKUP(B{row},Prestamos!$A:$F,6,FALSE),"")'
     factor = _ifs_factor_frecuencia(frecuencia)
-    # ROUND a colones enteros -- igual que calcular_pago() en calculos.py,
-    # para que no queden centavos ni se desalineen los dos calculos.
+    # Redondeado al multiplo de 500 mas cercano (denominacion de efectivo
+    # tipica en colones) -- igual que redondear_500() en calculos.py.
+    # Interes y abono se redondean cada uno por separado.
     g = (f'=IF(B{row}="","",IF(F{row}="ID invalido","",'
-         f'ROUND(F{row}*IFERROR(VLOOKUP(B{row},Prestamos!$A:$E,5,FALSE),0)*{factor},0)))')
-    h = f'=IF(B{row}="","",IF(F{row}="ID invalido","",MAX(0,E{row}-G{row})))'
+         f'ROUND(F{row}*IFERROR(VLOOKUP(B{row},Prestamos!$A:$E,5,FALSE),0)*{factor}/500,0)*500))')
+    h = f'=IF(B{row}="","",IF(F{row}="ID invalido","",ROUND(MAX(0,E{row}-G{row})/500,0)*500))'
     i = f'=IF(B{row}="","",IF(F{row}="ID invalido","",F{row}-H{row}))'
     return [f, g, h, i]
 
@@ -180,8 +181,33 @@ def setup_pagos(sh):
     # de pago del prestamo. El interes de cada pago se prorratea segun esa
     # frecuencia (mismos dias de referencia que Prestamos!L: Diario=1,
     # Semanal=7, Quincenal=15, Mensual=30, sobre un mes de 30 dias).
-    rows_fgh_i = [formula_fila_pagos(row) for row in range(2, PAGOS_PREFILL_ROWS + 1)]
-    ws.update(rows_fgh_i, f"F2:I{PAGOS_PREFILL_ROWS}", value_input_option="USER_ENTERED")
+    #
+    # OJO: solo se escribe la formula en filas SIN pago (columna B vacia).
+    # Un pago ya registrado queda "congelado" con valores fijos en F:I en
+    # el momento en que se hace (ver app.py); volver a poner la formula
+    # ahi recalcularia su interes con la tasa ACTUAL del prestamo en vez
+    # de la que tenia cuando se pago (se probo en vivo, corrompio el
+    # historial real -- por eso este cuidado).
+    valores_b = ws.col_values(2)
+    valores_b += [""] * max(0, PAGOS_PREFILL_ROWS - len(valores_b) + 1)
+    filas_vacias = [
+        row for row in range(2, PAGOS_PREFILL_ROWS + 1)
+        if str(valores_b[row - 1]).strip() == ""
+    ]
+
+    rangos = []
+    for row in filas_vacias:
+        if rangos and rangos[-1][1] == row - 1:
+            rangos[-1] = (rangos[-1][0], row)
+        else:
+            rangos.append((row, row))
+
+    actualizaciones = [
+        {"range": f"F{inicio}:I{fin}", "values": [formula_fila_pagos(r) for r in range(inicio, fin + 1)]}
+        for inicio, fin in rangos
+    ]
+    if actualizaciones:
+        ws.batch_update(actualizaciones, value_input_option="USER_ENTERED")
 
     ws.format("B2:B1000", {"textFormat": {"foregroundColor": INPUT_FG, "fontFamily": FONT}})
     ws.format("D2:D1000", {"textFormat": {"foregroundColor": INPUT_FG, "fontFamily": FONT}, "numberFormat": DATE_FMT})

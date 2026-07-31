@@ -19,6 +19,7 @@ from calculos import (
     fmt_money,
     fmt_pct,
     proximo_pago,
+    redondear_500,
     siguiente_fila_libre,
 )
 from setup_sheet import formula_fila_pagos
@@ -558,7 +559,7 @@ with tab_prestamos:
             pd.to_numeric(base_df["Saldo pendiente"], errors="coerce")
             * pd.to_numeric(base_df["Tasa interes (%/periodo)"], errors="coerce")
             * factor
-        ).round()
+        ).apply(redondear_500)
         # Proximo pago = siguiente fecha fija de calendario (15/30, etc.)
         # despues del ultimo pago (o del inicio, si aun no pago nada).
         fecha_ref = base_df["Fecha ultimo pago"].replace("", pd.NA).fillna(base_df["Fecha inicio"])
